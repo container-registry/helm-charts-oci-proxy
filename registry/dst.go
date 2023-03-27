@@ -3,7 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
-	"github.com/container-registry/ocip/verify"
+	"github.com/container-registry/helm-charts-oci-proxy/verify"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"io"

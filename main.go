@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"github.com/container-registry/ocip/cmd"
+	"github.com/container-registry/helm-charts-oci-proxy/cmd"
 	"os"
 	"os/signal"
 )

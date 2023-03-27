@@ -24,7 +24,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/container-registry/ocip/registry"
+	"github.com/container-registry/helm-charts-oci-proxy/registry"
 	"github.com/spf13/cobra"
 )
 

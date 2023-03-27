@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/container-registry/ocip/dld"
+	"github.com/container-registry/helm-charts-oci-proxy/dld"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	helmregistry "helm.sh/helm/v3/pkg/registry"
