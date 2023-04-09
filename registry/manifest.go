@@ -86,10 +86,18 @@ func isCatalog(req *http.Request) bool {
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-an-image
 func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regError {
 	elem := strings.Split(req.URL.Path, "/")
+
+	if len(elem) < 3 {
+		return &regError{
+			Status:  http.StatusBadRequest,
+			Code:    "INVALID PARAMS",
+			Message: "No chart name specified",
+		}
+	}
+
 	elem = elem[1:]
 	target := elem[len(elem)-1]
 	repo := strings.Join(elem[1:len(elem)-2], "/")
-	hostnameParts := strings.Split(repo, "/")
 
 	switch req.Method {
 	case http.MethodGet:
@@ -98,14 +106,7 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 
 		c, ok := m.manifests[repo]
 		if !ok {
-			if len(hostnameParts) < 2 {
-				return &regError{
-					Status:  http.StatusBadRequest,
-					Code:    "INVALID PARAMS",
-					Message: "No chart name specified",
-				}
-			}
-			err := m.registry.PrepareChart(req.Context(), hostnameParts[0], hostnameParts[1], target)
+			err := m.registry.PrepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
@@ -113,7 +114,7 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 
 		ma, ok := c[target]
 		if !ok {
-			err := m.registry.PrepareChart(req.Context(), hostnameParts[0], hostnameParts[1], target)
+			err := m.registry.PrepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
@@ -140,21 +141,15 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 		m.lock.Lock()
 		defer m.lock.Unlock()
 		if _, ok := m.manifests[repo]; !ok {
-			if len(hostnameParts) < 2 {
-				return &regError{
-					Status:  http.StatusBadRequest,
-					Code:    "INVALID PARAMS",
-					Message: "No chart name specified",
-				}
-			}
-			err := m.registry.PrepareChart(req.Context(), hostnameParts[0], hostnameParts[1], target)
+
+			err := m.registry.PrepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
 		}
 		ma, ok := m.manifests[repo][target]
 		if !ok {
-			err := m.registry.PrepareChart(req.Context(), hostnameParts[0], hostnameParts[1], target)
+			err := m.registry.PrepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
@@ -187,28 +182,29 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 
 func (m *Manifests) handleTags(resp http.ResponseWriter, req *http.Request) *regError {
 	elem := strings.Split(req.URL.Path, "/")
+
+	if len(elem) < 4 {
+		return &regError{
+			Status:  http.StatusBadRequest,
+			Code:    "INVALID PARAMS",
+			Message: "No chart name specified",
+		}
+	}
+
 	elem = elem[1:]
 	repo := strings.Join(elem[1:len(elem)-2], "/")
-	hostnameParts := strings.Split(repo, "/")
 
 	if req.Method == "GET" {
 		m.lock.Lock()
 		defer m.lock.Unlock()
 
-		err := m.registry.PrepareChart(req.Context(), hostnameParts[0], hostnameParts[1], "")
-		if err != nil {
-			return err
-		}
-
 		c, ok := m.manifests[repo]
 		if !ok {
-			if !ok {
-				return &regError{
-					Status:  http.StatusNotFound,
-					Code:    "NOT FOUND",
-					Message: "Chart prepare error",
-				}
+			err := m.registry.PrepareChart(req.Context(), repo, "")
+			if err != nil {
+				return err
 			}
+			c, _ = m.manifests[repo]
 		}
 
 		var tags []string

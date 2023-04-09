@@ -15,13 +15,23 @@ import (
 	"strings"
 )
 
-func (r *registry) PrepareChart(ctx context.Context, repo string, chart string, reference string) *regError {
-	index, err := dld.DownloadIndex(repo)
+func (r *registry) PrepareChart(ctx context.Context, repo string, reference string) *regError {
+
+	elem := strings.Split(repo, "/")
+
+	if len(elem) < 2 {
+		return regErrInternal(fmt.Errorf("invalid repo length"))
+	}
+
+	path := strings.Join(elem[:len(elem)-1], "/")
+	chart := elem[len(elem)-1]
+
+	index, err := dld.DownloadIndex(path)
 	if err != nil {
 		return &regError{
 			Status:  http.StatusNotFound,
 			Code:    "NAME_UNKNOWN",
-			Message: fmt.Sprintf("index file fetch error: %s", repo),
+			Message: fmt.Sprintf("index file fetch error: %s", path),
 		}
 	}
 
@@ -41,13 +51,13 @@ func (r *registry) PrepareChart(ctx context.Context, repo string, chart string, 
 		}
 	}
 	reference = strings.TrimPrefix(chartVer.Version, "v")
-	downloadURL := fmt.Sprintf("https://%s/%s", repo, chartVer.URLs[0])
+	downloadURL := fmt.Sprintf("https://%s/%s", path, chartVer.URLs[0])
 
 	manifestData, err := dld.DownloadBytes(downloadURL)
 	if err != nil {
 		return regErrInternal(err)
 	}
-	dst := NewInternalDst(fmt.Sprintf("%s/%s", repo, chartVer.Name), r.Blobs.BlobHandler.(blobPutHandler), r.Manifests)
+	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), r.Blobs.BlobHandler.(blobPutHandler), r.Manifests)
 
 	packOpts := oras.PackOptions{}
 	memStore := memory.New()

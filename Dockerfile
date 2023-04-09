@@ -13,7 +13,9 @@ RUN ./do.sh build
 FROM alpine
 RUN apk add ca-certificates
 WORKDIR /root
-ENV PORT=9001
-COPY --from=build-env /root/proxy .
-EXPOSE 9001
+ENV PORT=9000
+ENV USE_TLS=false
+COPY --from=build-env /root/.bin/proxy .
+COPY --from=build-env /root/certs ./certs
+EXPOSE 9000
 CMD ["/bin/sh", "-c", "./proxy registry serve"]

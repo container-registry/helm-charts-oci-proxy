@@ -59,11 +59,14 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			debug, _ := env.GetBool("DEBUG", false)
 			cacheTTLMin, _ := env.GetInt("CACHE_TTL_MIN", 15)
 			useTLS, _ := env.GetBool("USE_TLS", false)
+			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
+			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
 
-			listener, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
+			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 			if err != nil {
 				l.Fatalln(err)
 			}
+
 			portI := listener.Addr().(*net.TCPAddr).Port
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
@@ -77,10 +80,10 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			errCh := make(chan error)
 			go func() {
 				if useTLS {
-					l.Printf("HTTP over TLS serving on port %d", portI)
-					errCh <- s.ServeTLS(listener, "registry.pem", "registry-key.pem")
+					l.Printf("listening HTTP over TLS serving on port %d", portI)
+					errCh <- s.ServeTLS(listener, certFile, keyfileFile)
 				} else {
-					l.Printf("HTTP on port %d", portI)
+					l.Printf("listening HTTP on port %d", portI)
 					errCh <- s.Serve(listener)
 				}
 			}()

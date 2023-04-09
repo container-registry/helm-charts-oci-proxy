@@ -40,6 +40,7 @@ func (f *InternalDst) Tag(ctx context.Context, desc ocispec.Descriptor, referenc
 	if err != nil {
 		return err
 	}
+
 	m, ok := f.manifests.manifests[f.repo]
 	if !ok {
 		return fmt.Errorf("repository not found")
