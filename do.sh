@@ -9,6 +9,14 @@ build() {
   CGO_ENABLED=0 go build -o .bin/proxy .
 }
 
+dockerbuild() {
+  docker buildx build --platform linux/amd64 --push -t registry.gitlab.com/moebius-labs/images/ocip .
+}
+
+deploy() {
+   helm upgrade -i --namespace ocip-staging --create-namespace ocip-staging ./chart
+}
+
 run() {
   USE_TLS=1 DEBUG=1 .bin/proxy registry serve
 }

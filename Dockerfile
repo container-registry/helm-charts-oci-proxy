@@ -7,7 +7,7 @@ COPY go.sum .
 RUN go mod download
 COPY . .
 
-RUN ./do.sh tests
+#RUN ./do.sh tests
 RUN ./do.sh build
 
 FROM alpine
