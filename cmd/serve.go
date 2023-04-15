@@ -17,6 +17,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/registry"
 	"github.com/dgraph-io/ristretto"
 	"k8s.io/utils/env"
 	"log"
@@ -25,7 +26,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/registry"
 	"github.com/spf13/cobra"
 )
 

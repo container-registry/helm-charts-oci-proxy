@@ -1,14 +1,18 @@
-package registry
+package manifest
 
 import (
 	"context"
-	"fmt"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/verify"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"io"
 	"strings"
 	"time"
+)
+
+const (
+	ProxyRefAnnotationPrefix = "com.container-registry.proxy-ref-"
 )
 
 const (
@@ -26,11 +30,16 @@ var defaultManifestMediaTypes = []string{
 
 type InternalDst struct {
 	repo           string
-	blobPutHandler blobPutHandler
-	manifests      *Manifests
+	blobPutHandler handler.BlobPutHandler
+	manifests      ManifestHandler
 }
 
-func NewInternalDst(repo string, blobPutHandler blobPutHandler, manifests *Manifests) *InternalDst {
+type ManifestHandler interface {
+	Read(repo string, name string) (Manifest, error)
+	Write(repo string, name string, n Manifest) error
+}
+
+func NewInternalDst(repo string, blobPutHandler handler.BlobPutHandler, manifests ManifestHandler) *InternalDst {
 	return &InternalDst{repo: repo, blobPutHandler: blobPutHandler, manifests: manifests}
 }
 
@@ -41,16 +50,11 @@ func (f *InternalDst) Tag(ctx context.Context, desc ocispec.Descriptor, referenc
 		return err
 	}
 
-	m, ok := f.manifests.manifests[f.repo]
-	if !ok {
-		return fmt.Errorf("repository not found")
+	hm, err := f.manifests.Read(f.repo, h.String())
+	if err != nil {
+		return err
 	}
-	manifest, ok := m[h.String()]
-	if !ok {
-		return fmt.Errorf("target manifest not found")
-	}
-	f.manifests.manifests[f.repo][reference] = manifest
-	return nil
+	return f.manifests.Write(f.repo, reference, hm)
 }
 
 func (f *InternalDst) Resolve(ctx context.Context, reference string) (ocispec.Descriptor, error) {
@@ -83,12 +87,6 @@ func (f *InternalDst) Push(ctx context.Context, expected ocispec.Descriptor, con
 
 	if isManifestDescriptor(expected) {
 
-		repo, ok := f.manifests.manifests[f.repo]
-		if !ok {
-			repo = map[string]Manifest{}
-			f.manifests.manifests[f.repo] = repo
-		}
-
 		binary, err := io.ReadAll(vrc)
 		if err != nil {
 			return err
@@ -102,14 +100,12 @@ func (f *InternalDst) Push(ctx context.Context, expected ocispec.Descriptor, con
 			}
 		}
 
-		repo[h.String()] = Manifest{
+		return f.manifests.Write(f.repo, h.String(), Manifest{
 			ContentType: expected.MediaType,
 			Blob:        binary,
 			Refs:        refs,
 			CreatedAt:   time.Now(),
-		}
-
-		return nil
+		})
 	}
 	//blob
 	return f.blobPutHandler.Put(ctx, "", h, vrc)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package registry
+package manifest
 
 import (
 	"bytes"
@@ -20,6 +20,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
+	"github.com/dgraph-io/ristretto"
 	"io"
 	"log"
 	"net/http"
@@ -49,54 +52,32 @@ type Manifest struct {
 type Manifests struct {
 	// maps repo -> Manifest tag/digest -> Manifest
 	manifests map[string]map[string]Manifest
-	registry  *registry
 	lock      sync.Mutex
 	log       *log.Logger
+
+	debug bool
+
+	indexCache  *ristretto.Cache
+	blobHandler handler.BlobHandler
 }
 
-func isManifest(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 4 {
-		return false
+func NewManifests(debug bool, indexCache *ristretto.Cache, blobHandler handler.BlobHandler, l *log.Logger) *Manifests {
+	return &Manifests{
+		debug:       debug,
+		manifests:   map[string]map[string]Manifest{},
+		indexCache:  indexCache,
+		blobHandler: blobHandler,
+		log:         l,
 	}
-	return elems[len(elems)-2] == "manifests"
-}
-
-func isTags(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 4 {
-		return false
-	}
-	return elems[len(elems)-2] == "tags"
-}
-
-func isCatalog(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 2 {
-		return false
-	}
-
-	return elems[len(elems)-1] == "_catalog"
-}
-
-func isV2(req *http.Request) bool {
-	elems := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
-	if len(elems) < 1 {
-		return false
-	}
-	return elems[len(elems)-1] == "v2"
 }
 
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-an-image
-func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regError {
+func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) *errors.RegError {
 	elem := strings.Split(req.URL.Path, "/")
 
 	if len(elem) < 3 {
-		return &regError{
+		return &errors.RegError{
 			Status:  http.StatusBadRequest,
 			Code:    "INVALID PARAMS",
 			Message: "No chart name specified",
@@ -127,7 +108,7 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 
 		c, ok := m.manifests[repo]
 		if !ok {
-			err := m.registry.PrepareChart(req.Context(), repo, target)
+			err := m.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
@@ -135,14 +116,14 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 
 		ma, ok := c[target]
 		if !ok {
-			err := m.registry.PrepareChart(req.Context(), repo, target)
+			err := m.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
 			ma, ok = c[target]
 			if !ok {
 				// we failed
-				return &regError{
+				return &errors.RegError{
 					Status:  http.StatusNotFound,
 					Code:    "NOT FOUND",
 					Message: "Chart prepare error",
@@ -163,21 +144,21 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 		defer m.lock.Unlock()
 		if _, ok := m.manifests[repo]; !ok {
 
-			err := m.registry.PrepareChart(req.Context(), repo, target)
+			err := m.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
 		}
 		ma, ok := m.manifests[repo][target]
 		if !ok {
-			err := m.registry.PrepareChart(req.Context(), repo, target)
+			err := m.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
 			ma, ok = m.manifests[repo][target]
 			if !ok {
 				// we failed
-				return &regError{
+				return &errors.RegError{
 					Status:  http.StatusNotFound,
 					Code:    "NOT FOUND",
 					Message: "Chart prepare error",
@@ -193,7 +174,7 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 		return nil
 
 	default:
-		return &regError{
+		return &errors.RegError{
 			Status:  http.StatusBadRequest,
 			Code:    "METHOD_UNKNOWN",
 			Message: "We don't understand your method + url",
@@ -201,10 +182,10 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 	}
 }
 
-func (m *Manifests) handleTags(resp http.ResponseWriter, req *http.Request) *regError {
+func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) *errors.RegError {
 	elem := strings.Split(req.URL.Path, "/")
 	if len(elem) < 4 {
-		return &regError{
+		return &errors.RegError{
 			Status:  http.StatusBadRequest,
 			Code:    "INVALID PARAMS",
 			Message: "No chart name specified",
@@ -230,7 +211,7 @@ func (m *Manifests) handleTags(resp http.ResponseWriter, req *http.Request) *reg
 
 		c, ok := m.manifests[repo]
 		if !ok {
-			err := m.registry.PrepareChart(req.Context(), repo, "")
+			err := m.prepareChart(req.Context(), repo, "")
 			if err != nil {
 				return err
 			}
@@ -259,7 +240,7 @@ func (m *Manifests) handleTags(resp http.ResponseWriter, req *http.Request) *reg
 		// Limit using n query parameter.
 		if ns := req.URL.Query().Get("n"); ns != "" {
 			if n, err := strconv.Atoi(ns); err != nil {
-				return &regError{
+				return &errors.RegError{
 					Status:  http.StatusBadRequest,
 					Code:    "BAD_REQUEST",
 					Message: fmt.Sprintf("parsing n: %v", err),
@@ -281,14 +262,38 @@ func (m *Manifests) handleTags(resp http.ResponseWriter, req *http.Request) *reg
 		return nil
 	}
 
-	return &regError{
+	return &errors.RegError{
 		Status:  http.StatusBadRequest,
 		Code:    "METHOD_UNKNOWN",
 		Message: "We don't understand your method + url",
 	}
 }
 
-func (m *Manifests) handleCatalog(resp http.ResponseWriter, req *http.Request) *regError {
+func (m *Manifests) Read(repo string, name string) (Manifest, error) {
+
+	mRepo, ok := m.manifests[repo]
+	if !ok {
+		return Manifest{}, fmt.Errorf("repository not found")
+	}
+	ma, ok := mRepo[name]
+	if !ok {
+		return Manifest{}, fmt.Errorf("manifest not found")
+	}
+	return ma, nil
+}
+
+func (m *Manifests) Write(repo string, name string, n Manifest) error {
+
+	mRepo, ok := m.manifests[repo]
+	if !ok {
+		mRepo = map[string]Manifest{}
+		m.manifests[repo] = mRepo
+	}
+	mRepo[name] = n
+	return nil
+}
+
+func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) *errors.RegError {
 	query := req.URL.Query()
 	nStr := query.Get("n")
 	n := 10000
@@ -296,7 +301,7 @@ func (m *Manifests) handleCatalog(resp http.ResponseWriter, req *http.Request) *
 		var err error
 		n, err = strconv.Atoi(nStr)
 		if err != nil {
-			return regErrInternal(err)
+			return errors.RegErrInternal(err)
 		}
 	}
 
@@ -304,7 +309,7 @@ func (m *Manifests) handleCatalog(resp http.ResponseWriter, req *http.Request) *
 	elems = elems[1:]
 
 	if req.Method != "GET" {
-		return &regError{
+		return &errors.RegError{
 			Status:  http.StatusBadRequest,
 			Code:    "METHOD_UNKNOWN",
 			Message: "We don't understand your method + url",
@@ -317,7 +322,7 @@ func (m *Manifests) handleCatalog(resp http.ResponseWriter, req *http.Request) *
 	if len(elems) > 2 {
 		// we have repo
 		repo := strings.Join(elems[0:len(elems)-2], "/")
-		index, _ := m.registry.getIndex(repo)
+		index, _ := m.GetIndex(repo)
 		if index != nil {
 			// show index's content instead of local
 			for r := range index.Entries {

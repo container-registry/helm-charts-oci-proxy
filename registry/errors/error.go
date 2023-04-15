@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package registry
+package errors
 
 import (
 	"encoding/json"
 	"net/http"
 )
 
-type regError struct {
+type RegError struct {
 	Status  int
 	Code    string
 	Message string
 }
 
-func (r *regError) Write(resp http.ResponseWriter) error {
+func (r *RegError) Write(resp http.ResponseWriter) error {
 	resp.WriteHeader(r.Status)
 
 	type err struct {
@@ -46,33 +46,27 @@ func (r *regError) Write(resp http.ResponseWriter) error {
 }
 
 // regErrInternal returns an internal server error.
-func regErrInternal(err error) *regError {
-	return &regError{
+func RegErrInternal(err error) *RegError {
+	return &RegError{
 		Status:  http.StatusInternalServerError,
 		Code:    "INTERNAL_SERVER_ERROR",
 		Message: err.Error(),
 	}
 }
 
-var regErrBlobUnknown = &regError{
-	Status:  http.StatusNotFound,
-	Code:    "BLOB_UNKNOWN",
-	Message: "Unknown Blob",
-}
-
-var regErrUnsupported = &regError{
+var RegErrUnsupported = &RegError{
 	Status:  http.StatusMethodNotAllowed,
 	Code:    "UNSUPPORTED",
 	Message: "Unsupported operation",
 }
 
-var regErrDigestMismatch = &regError{
+var RegErrDigestMismatch = &RegError{
 	Status:  http.StatusBadRequest,
 	Code:    "DIGEST_INVALID",
 	Message: "digest does not match contents",
 }
 
-var regErrDigestInvalid = &regError{
+var RegErrDigestInvalid = &RegError{
 	Status:  http.StatusBadRequest,
 	Code:    "NAME_INVALID",
 	Message: "invalid digest",
