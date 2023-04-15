@@ -62,13 +62,13 @@ func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, 
 
 	go func() {
 		ticker := time.NewTicker(time.Minute)
-		if ma.debug {
-			ma.log.Println("cleanup cycle")
-		}
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
+				if ma.debug {
+					ma.log.Println("cleanup cycle")
+				}
 				ma.lock.Lock()
 				for _, m := range ma.manifests {
 					for k, v := range m {
@@ -84,7 +84,9 @@ func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, 
 									if ma.debug {
 										l.Printf("deleting blob %s", h.String())
 									}
-									_ = delHandler.Delete(ctx, "", h)
+									if err = delHandler.Delete(ctx, "", h); err != nil {
+										l.Println(err)
+									}
 								}
 							}
 						}
@@ -165,8 +167,8 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) *errors.
 		resp.Header().Set("Content-Type", ma.ContentType)
 		resp.Header().Set("Content-Length", fmt.Sprint(len(ma.Blob)))
 		resp.WriteHeader(http.StatusOK)
-		io.Copy(resp, bytes.NewReader(ma.Blob))
-		return nil
+		_, err := io.Copy(resp, bytes.NewReader(ma.Blob))
+		return errors.RegErrInternal(err)
 
 	case http.MethodHead:
 		m.lock.Lock()
@@ -287,8 +289,8 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) *err
 		msg, _ := json.Marshal(tagsToList)
 		resp.Header().Set("Content-Length", fmt.Sprint(len(msg)))
 		resp.WriteHeader(http.StatusOK)
-		io.Copy(resp, bytes.NewReader(msg))
-		return nil
+		_, err := io.Copy(resp, bytes.NewReader(msg))
+		return errors.RegErrInternal(err)
 	}
 
 	return &errors.RegError{
@@ -385,6 +387,6 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) *
 	msg, _ := json.Marshal(repositoriesToList)
 	resp.Header().Set("Content-Length", fmt.Sprint(len(msg)))
 	resp.WriteHeader(http.StatusOK)
-	io.Copy(resp, bytes.NewReader([]byte(msg)))
-	return nil
+	_, err := io.Copy(resp, bytes.NewReader([]byte(msg)))
+	return errors.RegErrInternal(err)
 }
