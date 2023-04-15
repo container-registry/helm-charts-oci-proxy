@@ -27,6 +27,14 @@ spec:
       serviceAccountName: {{ include "ocip.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      volumes:
+        - name: data
+            {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "ocip.fullname" .) }}
+            {{- else }}
+          emptyDir: { }
+            {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -52,6 +60,9 @@ spec:
               value: {{ quote .Values.app.useTLS }}
             - name: DEBUG
               value: {{ quote .Values.app.debug }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/data
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

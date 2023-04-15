@@ -1,21 +1,8 @@
-// Copyright 2018 Google LLC All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//    http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package manifest
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,6 +10,7 @@ import (
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
 	"github.com/dgraph-io/ristretto"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"io"
 	"log"
 	"net/http"
@@ -59,16 +47,57 @@ type Manifests struct {
 
 	indexCache  *ristretto.Cache
 	blobHandler handler.BlobHandler
+	cacheTTLMin int
 }
 
-func NewManifests(debug bool, indexCache *ristretto.Cache, blobHandler handler.BlobHandler, l *log.Logger) *Manifests {
-	return &Manifests{
+func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, cacheTTLMin int, blobHandler handler.BlobHandler, l *log.Logger) *Manifests {
+	ma := &Manifests{
 		debug:       debug,
 		manifests:   map[string]map[string]Manifest{},
 		indexCache:  indexCache,
 		blobHandler: blobHandler,
 		log:         l,
+		cacheTTLMin: cacheTTLMin,
 	}
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		if ma.debug {
+			ma.log.Println("cleanup cycle")
+		}
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ma.lock.Lock()
+				for _, m := range ma.manifests {
+					for k, v := range m {
+						if v.CreatedAt.Before(time.Now().Add(-time.Minute * time.Duration(ma.cacheTTLMin))) {
+							// delete
+							delete(m, k)
+							if delHandler, ok := ma.blobHandler.(handler.BlobDeleteHandler); ok {
+								for _, ref := range v.Refs {
+									h, err := v1.NewHash(ref)
+									if err != nil {
+										continue
+									}
+									if ma.debug {
+										l.Printf("deleting blob %s", h.String())
+									}
+									_ = delHandler.Delete(ctx, "", h)
+								}
+							}
+						}
+					}
+				}
+				ma.lock.Unlock()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return ma
 }
 
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest

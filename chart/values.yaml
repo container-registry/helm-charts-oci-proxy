@@ -63,6 +63,13 @@ resources:
      cpu: 100m
      memory: 128Mi
 
+# persistence
+persistence:
+  enabled: true
+  size: 5Gi
+  # storageClass: "-"
+  accessMode: ReadWriteOnce
+  annotations: {}
 # custom app values
 app:
   debug: true

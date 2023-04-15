@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/registry"
+	"github.com/dgraph-io/badger/v3"
 	"github.com/dgraph-io/ristretto"
 	"k8s.io/utils/env"
 	"log"
@@ -62,6 +63,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			useTLS, _ := env.GetBool("USE_TLS", false)
 			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
 			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
+			dbLocation := env.GetString("DB_LOCATION", "/var/data")
 
 			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 			if err != nil {
@@ -79,6 +81,12 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				l.Fatalln(err)
 			}
 
+			db, err := badger.Open(badger.DefaultOptions(dbLocation))
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer db.Close()
+
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
 				Handler: registry.New(ctx,
@@ -86,6 +94,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 					registry.CacheTTLMin(cacheTTLMin),
 					registry.Logger(l),
 					registry.IndexCache(indexCache),
+					registry.Badger(db),
 				),
 			}
 

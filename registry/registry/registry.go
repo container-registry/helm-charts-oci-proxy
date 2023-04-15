@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
+	badger2 "github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/badger"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/mem"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/helper"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/manifest"
+	"github.com/dgraph-io/badger/v3"
 	"github.com/dgraph-io/ristretto"
 	"io"
 	"log"
@@ -28,6 +30,7 @@ type Registry struct {
 	debug       bool
 	cacheTTLMin int
 	indexCache  *ristretto.Cache
+	badger      *badger.DB
 }
 
 func (r *Registry) v2(resp http.ResponseWriter, req *http.Request) *errors.RegError {
@@ -100,7 +103,7 @@ func (r *Registry) debugHandler(resp http.ResponseWriter) *errors.RegError {
 	if !r.debug {
 		return nil
 	}
-
+	//
 	//r.Manifests.lock.Lock()
 	//r.Blobs.lock.Lock()
 	//
@@ -139,43 +142,15 @@ func New(ctx context.Context, opts ...Option) http.Handler {
 		o(r)
 	}
 
-	r.blobsHandler = mem.NewMemHandler()
-	r.blobs = blobs.NewBlobs(r.blobsHandler, r.log)
-	r.manifests = manifest.NewManifests(r.debug, r.indexCache, r.blobsHandler, r.log)
+	if r.badger != nil {
+		// badger handler
+		r.blobsHandler = badger2.NewHandler(r.badger)
+	} else {
+		r.blobsHandler = mem.NewMemHandler()
+	}
 
-	go func() {
-		ticker := time.NewTicker(time.Minute * 2)
-		if r.debug {
-			r.log.Println("cleanup cycle")
-		}
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				//r.Manifests.lock.Lock()
-				//for _, m := range r.Manifests.manifests {
-				//	for k, v := range m {
-				//		if v.CreatedAt.Before(time.Now().Add(-time.Minute * time.Duration(r.cacheTTLMin))) {
-				//			// delete
-				//			delete(m, k)
-				//			if delHandler, ok := r.Blobs.BlobHandler.(blobs.BlobDeleteHandler); ok {
-				//				for _, ref := range v.Refs {
-				//					h, err := v1.NewHash(ref)
-				//					if err != nil {
-				//						continue
-				//					}
-				//					_ = delHandler.Delete(ctx, "", h)
-				//				}
-				//			}
-				//		}
-				//	}
-				//}
-				//r.Manifests.lock.Unlock()
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	r.blobs = blobs.NewBlobs(r.blobsHandler, r.log)
+	r.manifests = manifest.NewManifests(ctx, r.debug, r.indexCache, r.cacheTTLMin, r.blobsHandler, r.log)
 
 	return http.HandlerFunc(r.root)
 }
@@ -194,6 +169,12 @@ func Logger(l *log.Logger) Option {
 func IndexCache(c *ristretto.Cache) Option {
 	return func(r *Registry) {
 		r.indexCache = c
+	}
+}
+
+func Badger(db *badger.DB) Option {
+	return func(r *Registry) {
+		r.badger = db
 	}
 }
 

@@ -20,12 +20,6 @@ func NewMemHandler() *Handler {
 	}
 }
 
-func (m *Handler) Debug() map[string][]byte {
-	m.lock.Lock()
-	defer m.lock.Unlock()
-	return m.m
-}
-
 func (m *Handler) Stat(_ context.Context, _ string, h v1.Hash) (int64, error) {
 	m.lock.Lock()
 	defer m.lock.Unlock()

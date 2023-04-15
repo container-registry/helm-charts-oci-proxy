@@ -31,15 +31,10 @@ var defaultManifestMediaTypes = []string{
 type InternalDst struct {
 	repo           string
 	blobPutHandler handler.BlobPutHandler
-	manifests      ManifestHandler
+	manifests      *Manifests
 }
 
-type ManifestHandler interface {
-	Read(repo string, name string) (Manifest, error)
-	Write(repo string, name string, n Manifest) error
-}
-
-func NewInternalDst(repo string, blobPutHandler handler.BlobPutHandler, manifests ManifestHandler) *InternalDst {
+func NewInternalDst(repo string, blobPutHandler handler.BlobPutHandler, manifests *Manifests) *InternalDst {
 	return &InternalDst{repo: repo, blobPutHandler: blobPutHandler, manifests: manifests}
 }
 
