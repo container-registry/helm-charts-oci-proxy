@@ -17,6 +17,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"github.com/dgraph-io/ristretto"
 	"k8s.io/utils/env"
 	"log"
 	"net"
@@ -68,12 +69,23 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			}
 
 			portI := listener.Addr().(*net.TCPAddr).Port
+
+			indexCache, err := ristretto.NewCache(&ristretto.Config{
+				NumCounters: 1e7,     // number of keys to track frequency of (10M).
+				MaxCost:     1 << 30, // maximum cost of cache (1GB).
+				BufferItems: 64,      // number of keys per Get buffer.
+			})
+			if err != nil {
+				l.Fatalln(err)
+			}
+
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
 				Handler: registry.New(ctx,
 					registry.Debug(debug),
 					registry.CacheTTLMin(cacheTTLMin),
 					registry.Logger(l),
+					registry.IndexCache(indexCache),
 				),
 			}
 

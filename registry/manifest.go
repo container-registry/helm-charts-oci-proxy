@@ -82,6 +82,14 @@ func isCatalog(req *http.Request) bool {
 	return elems[len(elems)-1] == "_catalog"
 }
 
+func isV2(req *http.Request) bool {
+	elems := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
+	if len(elems) < 1 {
+		return false
+	}
+	return elems[len(elems)-1] == "v2"
+}
+
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-an-image
 func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regError {
@@ -97,7 +105,20 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 
 	elem = elem[1:]
 	target := elem[len(elem)-1]
-	repo := strings.Join(elem[1:len(elem)-2], "/")
+
+	var repoParts []string
+	for i := len(elem) - 3; i > 0; i-- {
+		if elem[i] == "v2" {
+			//enough
+			break
+		}
+		repoParts = append(repoParts, elem[i])
+	}
+	sort.SliceStable(repoParts, func(i, j int) bool {
+		//reverse
+		return i > j
+	})
+	repo := strings.Join(repoParts, "/")
 
 	switch req.Method {
 	case http.MethodGet:
@@ -182,7 +203,6 @@ func (m *Manifests) handle(resp http.ResponseWriter, req *http.Request) *regErro
 
 func (m *Manifests) handleTags(resp http.ResponseWriter, req *http.Request) *regError {
 	elem := strings.Split(req.URL.Path, "/")
-
 	if len(elem) < 4 {
 		return &regError{
 			Status:  http.StatusBadRequest,
@@ -190,9 +210,19 @@ func (m *Manifests) handleTags(resp http.ResponseWriter, req *http.Request) *reg
 			Message: "No chart name specified",
 		}
 	}
-
-	elem = elem[1:]
-	repo := strings.Join(elem[1:len(elem)-2], "/")
+	var repoParts []string
+	for i := len(elem) - 3; i > 0; i-- {
+		if elem[i] == "v2" {
+			//stop
+			break
+		}
+		repoParts = append(repoParts, elem[i])
+	}
+	sort.SliceStable(repoParts, func(i, j int) bool {
+		//reverse
+		return i > j
+	})
+	repo := strings.Join(repoParts, "/")
 
 	if req.Method == "GET" {
 		m.lock.Lock()
@@ -263,15 +293,46 @@ func (m *Manifests) handleCatalog(resp http.ResponseWriter, req *http.Request) *
 	nStr := query.Get("n")
 	n := 10000
 	if nStr != "" {
-		n, _ = strconv.Atoi(nStr)
+		var err error
+		n, err = strconv.Atoi(nStr)
+		if err != nil {
+			return regErrInternal(err)
+		}
 	}
 
-	if req.Method == "GET" {
+	elems := strings.Split(req.URL.Path, "/")
+	elems = elems[1:]
+
+	if req.Method != "GET" {
+		return &regError{
+			Status:  http.StatusBadRequest,
+			Code:    "METHOD_UNKNOWN",
+			Message: "We don't understand your method + url",
+		}
+	}
+
+	var repos []string
+	countRepos := 0
+
+	if len(elems) > 2 {
+		// we have repo
+		repo := strings.Join(elems[0:len(elems)-2], "/")
+		index, _ := m.registry.getIndex(repo)
+		if index != nil {
+			// show index's content instead of local
+			for r := range index.Entries {
+				if countRepos >= n {
+					break
+				}
+				countRepos++
+				repos = append(repos, fmt.Sprintf("%s/%s", repo, r))
+			}
+		}
+
+	} else {
 		m.lock.Lock()
 		defer m.lock.Unlock()
 
-		var repos []string
-		countRepos := 0
 		// TODO: implement pagination
 		for key := range m.manifests {
 			if countRepos >= n {
@@ -280,20 +341,16 @@ func (m *Manifests) handleCatalog(resp http.ResponseWriter, req *http.Request) *
 			countRepos++
 			repos = append(repos, key)
 		}
-		repositoriesToList := Catalog{
-			Repos: repos,
-		}
-
-		msg, _ := json.Marshal(repositoriesToList)
-		resp.Header().Set("Content-Length", fmt.Sprint(len(msg)))
-		resp.WriteHeader(http.StatusOK)
-		io.Copy(resp, bytes.NewReader([]byte(msg)))
-		return nil
 	}
 
-	return &regError{
-		Status:  http.StatusBadRequest,
-		Code:    "METHOD_UNKNOWN",
-		Message: "We don't understand your method + url",
+	sort.Strings(repos)
+	repositoriesToList := Catalog{
+		Repos: repos,
 	}
+
+	msg, _ := json.Marshal(repositoriesToList)
+	resp.Header().Set("Content-Length", fmt.Sprint(len(msg)))
+	resp.WriteHeader(http.StatusOK)
+	io.Copy(resp, bytes.NewReader([]byte(msg)))
+	return nil
 }

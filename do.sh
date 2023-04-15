@@ -10,7 +10,7 @@ build() {
 }
 
 dockerbuild() {
-  docker buildx build --platform linux/amd64 --push -t registry.gitlab.com/moebius-labs/images/ocip .
+  docker buildx build --platform linux/amd64 --push -t 8gears.container-registry.com/library/ocip .
 }
 
 deploy() {

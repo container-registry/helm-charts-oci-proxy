@@ -1,13 +1,12 @@
 replicaCount: 1
 
 image:
-  repository: registry.gitlab.com/moebius-labs/images/ocip
+  repository: 8gears.container-registry.com/library/ocip
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   tag: ""
 
-imagePullSecrets:
-  - name: regcred
+imagePullSecrets: []
 
 nameOverride: ""
 fullnameOverride: ""
@@ -66,7 +65,7 @@ resources:
 
 # custom app values
 app:
-  debug: false
+  debug: true
   useTLS: false
 
 autoscaling:

@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/dld"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	helmregistry "helm.sh/helm/v3/pkg/registry"
 	"net/http"
+	"net/url"
 	"oras.land/oras-go/v2"
 	"oras.land/oras-go/v2/content/memory"
 	"path/filepath"
@@ -26,7 +26,7 @@ func (r *registry) PrepareChart(ctx context.Context, repo string, reference stri
 	path := strings.Join(elem[:len(elem)-1], "/")
 	chart := elem[len(elem)-1]
 
-	index, err := dld.DownloadIndex(path)
+	index, err := r.getIndex(path)
 	if err != nil {
 		return &regError{
 			Status:  http.StatusNotFound,
@@ -51,13 +51,23 @@ func (r *registry) PrepareChart(ctx context.Context, repo string, reference stri
 		}
 	}
 	reference = strings.TrimPrefix(chartVer.Version, "v")
-	downloadURL := fmt.Sprintf("https://%s/%s", path, chartVer.URLs[0])
 
-	manifestData, err := dld.DownloadBytes(downloadURL)
+	var downloadUrl string
+
+	u, err := url.Parse(chartVer.URLs[0])
+	if err != nil {
+		regErrInternal(err)
+	}
+	if u.IsAbs() {
+		downloadUrl = u.String()
+	} else {
+		downloadUrl = fmt.Sprintf("https://%s/%s", path, chartVer.URLs[0])
+	}
+
+	manifestData, err := r.download(downloadUrl)
 	if err != nil {
 		return regErrInternal(err)
 	}
-	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), r.Blobs.BlobHandler.(blobPutHandler), r.Manifests)
 
 	packOpts := oras.PackOptions{}
 	memStore := memory.New()
@@ -80,7 +90,7 @@ func (r *registry) PrepareChart(ctx context.Context, repo string, reference stri
 	desc.Annotations = packOpts.ConfigAnnotations
 	packOpts.ConfigDescriptor = &desc
 	packOpts.PackImageManifest = true
-	name := filepath.Clean(filepath.Base(downloadURL))
+	name := filepath.Clean(filepath.Base(downloadUrl))
 
 	manifestFile := ocispec.Descriptor{
 		MediaType: helmregistry.ChartLayerMediaType,
@@ -116,6 +126,8 @@ func (r *registry) PrepareChart(ctx context.Context, repo string, reference stri
 		}
 		return nil
 	}
+
+	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), r.Blobs.BlobHandler.(blobPutHandler), r.Manifests)
 	// push
 	if reference == "" {
 		err = oras.CopyGraph(ctx, memStore, dst, root, copyOptions.CopyGraphOptions)
