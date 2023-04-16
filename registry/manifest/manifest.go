@@ -234,70 +234,84 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) *err
 		//reverse
 		return i > j
 	})
-	repo := strings.Join(repoParts, "/")
+	fullRepo := strings.Join(repoParts, "/")
 
-	if req.Method == "GET" {
-		m.lock.Lock()
-		defer m.lock.Unlock()
-
-		c, ok := m.manifests[repo]
-		if !ok {
-			err := m.prepareChart(req.Context(), repo, "")
-			if err != nil {
-				return err
-			}
-			c, _ = m.manifests[repo]
+	if req.Method != "GET" {
+		return &errors.RegError{
+			Status:  http.StatusBadRequest,
+			Code:    "METHOD_UNKNOWN",
+			Message: "We don't understand your method + url",
 		}
+	}
+	m.lock.Lock()
+	defer m.lock.Unlock()
 
-		var tags []string
+	c, ok := m.manifests[fullRepo]
+	if !ok {
+		err := m.prepareChart(req.Context(), fullRepo, "")
+		if err != nil {
+			return err
+		}
+		c, _ = m.manifests[fullRepo]
+	}
+
+	repoPath := strings.Join(repoParts[:len(repoParts)-1], "/")
+	var tags []string
+
+	index, _ := m.GetIndex(repoPath)
+
+	if index != nil {
+		if versions, ok := index.Entries[repoParts[len(repoParts)-1]]; ok {
+			for _, v := range versions {
+				tags = append(tags, v.Version)
+			}
+		}
+	} else {
 		for tag := range c {
 			if !strings.Contains(tag, "sha256:") {
 				tags = append(tags, tag)
 			}
 		}
-		sort.Strings(tags)
+	}
+	sort.Strings(tags)
 
-		// https://github.com/opencontainers/distribution-spec/blob/b505e9cc53ec499edbd9c1be32298388921bb705/detail.md#tags-paginated
-		// Offset using last query parameter.
-		if last := req.URL.Query().Get("last"); last != "" {
-			for i, t := range tags {
-				if t > last {
-					tags = tags[i:]
-					break
-				}
+	// https://github.com/opencontainers/distribution-spec/blob/b505e9cc53ec499edbd9c1be32298388921bb705/detail.md#tags-paginated
+	// Offset using last query parameter.
+	if last := req.URL.Query().Get("last"); last != "" {
+		for i, t := range tags {
+			if t > last {
+				tags = tags[i:]
+				break
 			}
 		}
+	}
 
-		// Limit using n query parameter.
-		if ns := req.URL.Query().Get("n"); ns != "" {
-			if n, err := strconv.Atoi(ns); err != nil {
-				return &errors.RegError{
-					Status:  http.StatusBadRequest,
-					Code:    "BAD_REQUEST",
-					Message: fmt.Sprintf("parsing n: %v", err),
-				}
-			} else if n < len(tags) {
-				tags = tags[:n]
+	// Limit using n query parameter.
+	if ns := req.URL.Query().Get("n"); ns != "" {
+		if n, err := strconv.Atoi(ns); err != nil {
+			return &errors.RegError{
+				Status:  http.StatusBadRequest,
+				Code:    "BAD_REQUEST",
+				Message: fmt.Sprintf("parsing n: %v", err),
 			}
+		} else if n < len(tags) {
+			tags = tags[:n]
 		}
+	}
 
-		tagsToList := listTags{
-			Name: repo,
-			Tags: tags,
-		}
+	tagsToList := listTags{
+		Name: fullRepo,
+		Tags: tags,
+	}
 
-		msg, _ := json.Marshal(tagsToList)
-		resp.Header().Set("Content-Length", fmt.Sprint(len(msg)))
-		resp.WriteHeader(http.StatusOK)
-		_, err := io.Copy(resp, bytes.NewReader(msg))
+	msg, _ := json.Marshal(tagsToList)
+	resp.Header().Set("Content-Length", fmt.Sprint(len(msg)))
+	resp.WriteHeader(http.StatusOK)
+	_, err := io.Copy(resp, bytes.NewReader(msg))
+	if err != nil {
 		return errors.RegErrInternal(err)
 	}
-
-	return &errors.RegError{
-		Status:  http.StatusBadRequest,
-		Code:    "METHOD_UNKNOWN",
-		Message: "We don't understand your method + url",
-	}
+	return nil
 }
 
 func (m *Manifests) Read(repo string, name string) (Manifest, error) {
