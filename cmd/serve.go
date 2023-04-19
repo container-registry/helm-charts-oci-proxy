@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/registry"
 	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v3/options"
 	"github.com/dgraph-io/ristretto"
 	"k8s.io/utils/env"
 	"log"
@@ -73,15 +74,19 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			portI := listener.Addr().(*net.TCPAddr).Port
 
 			indexCache, err := ristretto.NewCache(&ristretto.Config{
-				NumCounters: 1e7,     // number of keys to track frequency of (10M).
-				MaxCost:     1 << 30, // maximum cost of cache (1GB).
-				BufferItems: 64,      // number of keys per Get buffer.
+				NumCounters: 1e7,       // number of keys to track frequency of (10M).
+				MaxCost:     100000000, // maximum cost of cache (1GB).
+				BufferItems: 64,        // number of keys per Get buffer.
 			})
 			if err != nil {
 				l.Fatalln(err)
 			}
 
-			db, err := badger.Open(badger.DefaultOptions(dbLocation))
+			db, err := badger.Open(badger.DefaultOptions(dbLocation).
+				WithCompression(options.None).
+				WithBloomFalsePositive(0).
+				WithMemTableSize(1024 * 1204 * 8), //8mb instead of 64
+			)
 			if err != nil {
 				log.Fatal(err)
 			}

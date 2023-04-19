@@ -157,7 +157,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) *errors.
 				return &errors.RegError{
 					Status:  http.StatusNotFound,
 					Code:    "NOT FOUND",
-					Message: "Chart prepare error",
+					Message: fmt.Sprintf("Chart prepare error: %v, %v", repo, target),
 				}
 			}
 		}
@@ -168,7 +168,10 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) *errors.
 		resp.Header().Set("Content-Length", fmt.Sprint(len(ma.Blob)))
 		resp.WriteHeader(http.StatusOK)
 		_, err := io.Copy(resp, bytes.NewReader(ma.Blob))
-		return errors.RegErrInternal(err)
+		if err != nil {
+			return errors.RegErrInternal(err)
+		}
+		return nil
 
 	case http.MethodHead:
 		m.lock.Lock()
@@ -263,7 +266,7 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) *err
 	if index != nil {
 		if versions, ok := index.Entries[repoParts[len(repoParts)-1]]; ok {
 			for _, v := range versions {
-				tags = append(tags, v.Version)
+				tags = append(tags, strings.TrimLeft(v.Version, "v"))
 			}
 		}
 	} else {
@@ -402,5 +405,8 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) *
 	resp.Header().Set("Content-Length", fmt.Sprint(len(msg)))
 	resp.WriteHeader(http.StatusOK)
 	_, err := io.Copy(resp, bytes.NewReader([]byte(msg)))
-	return errors.RegErrInternal(err)
+	if err != nil {
+		return errors.RegErrInternal(err)
+	}
+	return nil
 }

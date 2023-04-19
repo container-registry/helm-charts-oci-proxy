@@ -41,6 +41,11 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		}
 	}
 
+	if reference != "" && !strings.HasPrefix(reference, "v") {
+		reference = fmt.Sprintf("v%s", reference)
+	}
+
+	m.log.Printf("searching index for %s with reference %s\n", chart, reference)
 	chartVer, err := index.Get(chart, reference)
 	if err != nil {
 		return &errors.RegError{
@@ -49,6 +54,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 			Message: fmt.Sprintf("Chart: %s version: %s not found: %v", chart, reference, err),
 		}
 	}
+
 	if len(chartVer.URLs) == 0 {
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
