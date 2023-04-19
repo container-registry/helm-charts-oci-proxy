@@ -137,27 +137,35 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) *errors.
 		m.lock.Lock()
 		defer m.lock.Unlock()
 
+		var prepared bool
+
 		c, ok := m.manifests[repo]
 		if !ok {
 			err := m.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
+			prepared = true
+			// re-find
+			c = m.manifests[repo]
 		}
 
 		ma, ok := c[target]
 		if !ok {
-			err := m.prepareChart(req.Context(), repo, target)
-			if err != nil {
-				return err
+			if !prepared {
+				err := m.prepareChart(req.Context(), repo, target)
+				if err != nil {
+					return err
+				}
 			}
+
 			ma, ok = c[target]
 			if !ok {
 				// we failed
 				return &errors.RegError{
 					Status:  http.StatusNotFound,
 					Code:    "NOT FOUND",
-					Message: fmt.Sprintf("Chart prepare error: %v, %v", repo, target),
+					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
 				}
 			}
 		}
