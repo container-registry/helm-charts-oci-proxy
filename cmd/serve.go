@@ -17,9 +17,9 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/mem"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/registry"
-	"github.com/dgraph-io/badger/v3"
-	"github.com/dgraph-io/badger/v3/options"
 	"github.com/dgraph-io/ristretto"
 	"k8s.io/utils/env"
 	"log"
@@ -60,11 +60,16 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			}
 
 			debug, _ := env.GetBool("DEBUG", false)
-			cacheTTLMin, _ := env.GetInt("CACHE_TTL_MIN", 15)
+			cacheTTL, _ := env.GetInt("CACHE_TTL", 60)
 			useTLS, _ := env.GetBool("USE_TLS", false)
 			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
 			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
-			dbLocation := env.GetString("DB_LOCATION", "/var/data")
+
+			dbLocation := env.GetString("DB_LOCATION", "/var/data/fstore")
+
+			if err := os.MkdirAll(dbLocation, os.ModePerm); err != nil {
+				log.Fatalln(err)
+			}
 
 			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 			if err != nil {
@@ -82,24 +87,30 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				l.Fatalln(err)
 			}
 
-			db, err := badger.Open(badger.DefaultOptions(dbLocation).
-				WithCompression(options.None).
-				WithBloomFalsePositive(0).
-				WithMemTableSize(1024 * 1204 * 8), //8mb instead of 64
-			)
-			if err != nil {
-				log.Fatal(err)
-			}
-			defer db.Close()
+			//db, err := badger.Open(badger.DefaultOptions(dbLocation).
+			//	WithCompression(options.None).
+			//	WithBloomFalsePositive(0).
+			//	WithMemTableSize(1024 * 1204 * 8), //8mb instead of 64
+			//)
+			//if err != nil {
+			//	log.Fatal(err)
+			//}
+			//defer db.Close()
+
+			var blobsHandler handler.BlobHandler
+
+			//blobsHandler = badger2.NewHandler(db)
+			blobsHandler = mem.NewMemHandler()
+			//blobsHandler = file.NewHandler(dbLocation)
 
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
 				Handler: registry.New(ctx,
 					registry.Debug(debug),
-					registry.CacheTTLMin(cacheTTLMin),
+					registry.CacheTTL(cacheTTL),
 					registry.Logger(l),
 					registry.IndexCache(indexCache),
-					registry.Badger(db),
+					registry.BlobsHandler(blobsHandler),
 				),
 			}
 

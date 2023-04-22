@@ -18,7 +18,7 @@ deploy() {
 }
 
 run() {
-  USE_TLS=1 DEBUG=1 DB_LOCATION=/tmp CACHE_TTL_MIN=1 .bin/proxy registry serve
+  USE_TLS=1 DEBUG=1 DB_LOCATION=/tmp/fstore CACHE_TTL=30 .bin/proxy registry serve
 }
 
 tests() {

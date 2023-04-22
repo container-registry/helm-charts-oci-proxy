@@ -6,12 +6,9 @@ import (
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
-	badger2 "github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/badger"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/mem"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/helper"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/manifest"
-	"github.com/dgraph-io/badger/v3"
 	"github.com/dgraph-io/ristretto"
 	"io"
 	"log"
@@ -26,11 +23,10 @@ type Registry struct {
 	blobsHandler handler.BlobHandler
 	blobs        *blobs.Blobs `json:"blobs"`
 	//
-	manifests   *manifest.Manifests `json:"manifests"`
-	debug       bool
-	cacheTTLMin int
-	indexCache  *ristretto.Cache
-	badger      *badger.DB
+	manifests  *manifest.Manifests `json:"manifests"`
+	debug      bool
+	cacheTTL   int
+	indexCache *ristretto.Cache
 }
 
 func (r *Registry) v2(resp http.ResponseWriter, req *http.Request) *errors.RegError {
@@ -142,15 +138,8 @@ func New(ctx context.Context, opts ...Option) http.Handler {
 		o(r)
 	}
 
-	if r.badger != nil {
-		// badger handler
-		r.blobsHandler = badger2.NewHandler(r.badger)
-	} else {
-		r.blobsHandler = mem.NewMemHandler()
-	}
-
 	r.blobs = blobs.NewBlobs(r.blobsHandler, r.log)
-	r.manifests = manifest.NewManifests(ctx, r.debug, r.indexCache, r.cacheTTLMin, r.blobsHandler, r.log)
+	r.manifests = manifest.NewManifests(ctx, r.debug, r.indexCache, r.cacheTTL, r.blobsHandler, r.log)
 
 	return http.HandlerFunc(r.root)
 }
@@ -172,9 +161,9 @@ func IndexCache(c *ristretto.Cache) Option {
 	}
 }
 
-func Badger(db *badger.DB) Option {
+func BlobsHandler(bh handler.BlobHandler) Option {
 	return func(r *Registry) {
-		r.badger = db
+		r.blobsHandler = bh
 	}
 }
 
@@ -184,9 +173,9 @@ func Debug(v bool) Option {
 	}
 }
 
-func CacheTTLMin(v int) Option {
+func CacheTTL(v int) Option {
 	return func(r *Registry) {
-		r.cacheTTLMin = v
+		r.cacheTTL = v
 	}
 }
 

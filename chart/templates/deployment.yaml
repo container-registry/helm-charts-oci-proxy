@@ -60,6 +60,7 @@ spec:
               value: {{ quote .Values.app.useTLS }}
             - name: DEBUG
               value: {{ quote .Values.app.debug }}
+            - CACHE_TTL = {{ quote .Values.app.cache_ttl }}
           volumeMounts:
             - name: data
               mountPath: /var/data

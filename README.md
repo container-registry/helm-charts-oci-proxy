@@ -33,7 +33,7 @@ helm pull --repository-cache=/tmp2 oci://registry:9000/charts.jetstack.io/cert-m
 
 * `PORT` - specifies port, default `9000`
 * `DEBUG` - enabled debug if it's `TRUE`
-* `CACHE_TTL_MIN` - how long store manifest and related blobs, default value 15
+* `CACHE_TTL` - for how many seconds we have to store manifest and related blobs, default value is 60
 * `USE_TLS` - enabled HTTP over TLS
 
 

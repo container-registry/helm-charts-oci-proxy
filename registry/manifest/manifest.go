@@ -47,17 +47,17 @@ type Manifests struct {
 
 	indexCache  *ristretto.Cache
 	blobHandler handler.BlobHandler
-	cacheTTLMin int
+	cacheTTL    int
 }
 
-func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, cacheTTLMin int, blobHandler handler.BlobHandler, l *log.Logger) *Manifests {
+func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, cacheTTL int, blobHandler handler.BlobHandler, l *log.Logger) *Manifests {
 	ma := &Manifests{
 		debug:       debug,
 		manifests:   map[string]map[string]Manifest{},
 		indexCache:  indexCache,
 		blobHandler: blobHandler,
 		log:         l,
-		cacheTTLMin: cacheTTLMin,
+		cacheTTL:    cacheTTL,
 	}
 
 	go func() {
@@ -72,7 +72,7 @@ func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, 
 				ma.lock.Lock()
 				for _, m := range ma.manifests {
 					for k, v := range m {
-						if v.CreatedAt.Before(time.Now().Add(-time.Minute * time.Duration(ma.cacheTTLMin))) {
+						if v.CreatedAt.Before(time.Now().Add(-time.Second * time.Duration(ma.cacheTTL))) {
 							// delete
 							delete(m, k)
 							if delHandler, ok := ma.blobHandler.(handler.BlobDeleteHandler); ok {
