@@ -4,7 +4,8 @@
 
 Transparently proxy and transform [Chart Repository styled](https://helm.sh/docs/topics/chart_repository/) Helm Charts as OCI artifacts. Now you can address any public Chart Repository styled Helm Chart as an OCI image.
 
-![Diagram of Helm Chart Proxy](docs/diagram.svg | width=66%)
+<p align="center"><img src="docs/diagram.svg" alt="Diagram showing the workflow of the Helm Chart OCI Proxy" width=66%></p>
+
 
 ## Usage
 
@@ -18,8 +19,12 @@ You can use the Helm Chart OCI Proxy with Harbor Container Registry when you add
 
 Example Endpoint URL: `https://chartproxy.container-registry.com/**charts.jetstack.io**?
 
-![Add Helm Chart OCI Proxy to Harbor](docs/harbor_registry_endpoint.png | width=50%) 
-  
+<p align="center"><img src="docs/harbor_registry_endpoint.png" alt="Screenshot of adding Helm Chart OCI Proxy to Harbor" width=36%></p>
+
+Then you can a replication rule.
+
+<p align="center"><img src="docs/harbor_replication_rule.png" alt="Screenshot on how to create a replication rule for Helm Chart OCI Proxy to Harbor" width=36%></p>
+
   
 ## Installation  
   
