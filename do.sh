@@ -9,8 +9,9 @@ build() {
   CGO_ENABLED=0 go build -o .bin/proxy .
 }
 
-dockerbuild() {
-  docker buildx build --platform linux/amd64 --push -t 8gears.container-registry.com/library/ocip .
+build_image() {
+  git_commit=$(git rev-parse --short HEAD)
+  docker buildx build --platform linux/amd64 --push -t 8gears.container-registry.com/library/ocip:$git_commit .
 }
 
 deploy() {
