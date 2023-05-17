@@ -1,0 +1,144 @@
+---
+# Source: helm-charts-oci-proxy/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: chartproxy-helm-charts-oci-proxy
+  labels:
+    helm.sh/chart: helm-charts-oci-proxy-1.0.0
+    app.kubernetes.io/name: helm-charts-oci-proxy
+    app.kubernetes.io/instance: chartproxy
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9000
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: helm-charts-oci-proxy
+    app.kubernetes.io/instance: chartproxy
+---
+# Source: helm-charts-oci-proxy/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chartproxy-helm-charts-oci-proxy
+  labels:
+    helm.sh/chart: helm-charts-oci-proxy-1.0.0
+    app.kubernetes.io/name: helm-charts-oci-proxy
+    app.kubernetes.io/instance: chartproxy
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: helm-charts-oci-proxy
+      app.kubernetes.io/instance: chartproxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: helm-charts-oci-proxy
+        app.kubernetes.io/instance: chartproxy
+    spec:
+      serviceAccountName: default
+      securityContext:
+        {}
+      volumes:
+        - name: data
+          emptyDir: { }
+      containers:
+        - name: helm-charts-oci-proxy
+          securityContext:
+            {}
+          image: "8gears.container-registry.com/library/helm-charts-oci-proxy:latest"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+              scheme: HTTP
+          env:
+            - name: CACHE_TTL
+              value: "3600"
+            
+            - name: DEBUG
+              value: "false"
+            
+            - name: USE_TLS
+              value: "false"
+            
+          volumeMounts:
+            - name: data
+              mountPath: /var/data
+          resources:
+            limits:
+              memory: 1024Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+---
+# Source: helm-charts-oci-proxy/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chartproxy-helm-charts-oci-proxy
+  labels:
+    helm.sh/chart: helm-charts-oci-proxy-1.0.0
+    app.kubernetes.io/name: helm-charts-oci-proxy
+    app.kubernetes.io/instance: chartproxy
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    kubernetes.io/tls-acme: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - "chartproxy.container-registry.com"
+      secretName: chartproxy-tls
+  rules:
+    - host: "chartproxy.container-registry.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chartproxy-helm-charts-oci-proxy
+                port:
+                  number: 9000
+---
+# Source: helm-charts-oci-proxy/templates/tests/test-connection.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "chartproxy-helm-charts-oci-proxy-test-connection"
+  labels:
+    helm.sh/chart: helm-charts-oci-proxy-1.0.0
+    app.kubernetes.io/name: helm-charts-oci-proxy
+    app.kubernetes.io/instance: chartproxy
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['wget']
+      args: ['chartproxy-helm-charts-oci-proxy:9000']
+  restartPolicy: Never

@@ -9,15 +9,15 @@ build() {
   CGO_ENABLED=0 go build -o .bin/proxy .
 }
 
-build_image() {
+build_push_image() {
   git_commit=$(git rev-parse --short HEAD)
-  docker buildx build --platform linux/amd64 --push -t 8gears.container-registry.com/library/helm-charts-oci-proxy:$git_commit .
+  docker buildx build --platform linux/amd64 --push -t 8gears.container-registry.com/library/helm-charts-oci-proxy:latest -t 8gears.container-registry.com/library/helm-charts-oci-proxy:$git_commit .
 }
 
 build_push_chart() {
   git_commit=$(git rev-parse --short HEAD)
   helm package chart
-  helm push helm-charts-oci-proxy-1.0.0.tgz oci://8gears.container-registry.com/library/helm-charts-oci-proxy
+  helm push helm-charts-oci-proxy-1.0.0.tgz oci://8gears.container-registry.com/library
 }
 
 

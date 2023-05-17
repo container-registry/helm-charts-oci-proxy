@@ -17,7 +17,7 @@ helm pull oci://chartproxy.container-registry.com/charts.jetstack.io/cert-manage
 
 You can use the Helm Chart OCI Proxy with Harbor Container Registry when you add each endpoint that you want to proxy explicitly.
 
-Example Endpoint URL: `https://chartproxy.container-registry.com/**charts.jetstack.io**?
+Example Endpoint URL: `https://chartproxy.container-registry.com/charts.jetstack.io`
 
 <p align="center"><img src="docs/harbor_registry_endpoint.png" alt="Screenshot of adding Helm Chart OCI Proxy to Harbor" width=36%></p>
 
@@ -31,6 +31,7 @@ Then you can a replication rule.
 You can install and operate the service yourself, we currently provide a handy helm chart, so you can get started.
 
 ```bash
+helm install chartproxy --version 1.0.0 --create-namespace namespace chartproxy oci://8gears.container-registry.com/library/helm-charts-oci-proxy 
 
 ```
   
