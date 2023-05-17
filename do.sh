@@ -9,9 +9,17 @@ build() {
   CGO_ENABLED=0 go build -o .bin/proxy .
 }
 
-dockerbuild() {
-  docker buildx build --platform linux/amd64 --push -t 8gears.container-registry.com/library/ocip .
+build_image() {
+  git_commit=$(git rev-parse --short HEAD)
+  docker buildx build --platform linux/amd64 --push -t 8gears.container-registry.com/library/helm-charts-oci-proxy:$git_commit .
 }
+
+build_push_chart() {
+  git_commit=$(git rev-parse --short HEAD)
+  helm package chart
+  helm push helm-charts-oci-proxy-1.0.0.tgz oci://8gears.container-registry.com/library/helm-charts-oci-proxy
+}
+
 
 deploy() {
    helm upgrade -i --namespace ocip-staging --create-namespace ocip-staging ./chart
