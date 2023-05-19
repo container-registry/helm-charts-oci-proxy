@@ -6,13 +6,20 @@ Transparently proxy and transform [Chart Repository styled](https://helm.sh/docs
 
 <p align="center"><img src="docs/diagram.png" alt="Diagram showing the workflow of the Helm Chart OCI Proxy" width=66%></p>
 
+## What is it good for?
+
+This proxy was primary designed after Harbor 2.8 removed support for [Chart Repository](https://helm.sh/docs/topics/chart_repository/) in favor of OCI. 
+While you can switch the storage and distribution of your own Helm Charts easily, it is close to impossible to do so for all sorts of 3rd party Helm Charts.
+
+* Store all 3rd party public Helm Charts in your OCI compliant registry
+* Simplify your workflow and tooling by only use the OCI Helm Chart and not a mix of both
 
 ## Usage
 
 ```bash  
 helm pull oci://chartproxy.container-registry.com/charts.jetstack.io/cert-manager --version 1.11.2
 ```  
-  
+
 #### Use with Harbor
 
 You can use the Helm Chart OCI Proxy with Harbor Container Registry when you add each endpoint that you want to proxy explicitly.
