@@ -1,10 +1,10 @@
 replicaCount: 1
 
 image:
-  repository: 8gears.container-registry.com/library/ocip
+  repository: 8gears.container-registry.com/library/helm-charts-oci-proxy
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
-  tag: ""
+  tag: latest
 
 imagePullSecrets: []
 
@@ -39,42 +39,40 @@ service:
   port: 9000
 
 ingress:
-  enabled: true
-  className: ""
+  enabled: false
+  className: "nginx"
   annotations:
     kubernetes.io/ingress.class: nginx
     kubernetes.io/tls-acme: "true"
     cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
-    - host: stage-proxy.container-registry.com
+    - host: chartproxy.container-registry.com
       paths:
         - path: /
           pathType: Prefix
   tls:
-    - secretName: stage-proxy-tls
+    - secretName: chartproxy-acme-tls
       hosts:
-        - stage-proxy.container-registry.com
+        - chartproxy.container-registry.com
 
 resources:
-   limits:
-     cpu: 200m
-     memory: 256Mi
+#   limits:
+#     cpu: 200m
+#     memory: 256Mi
    requests:
      cpu: 100m
      memory: 128Mi
 
 # persistence
 persistence:
-  enabled: true
+  enabled: false
   size: 5Gi
   # storageClass: "-"
   accessMode: ReadWriteOnce
   annotations: {}
 # custom app values
-app:
-  debug: true
-  useTLS: false
-  cache_ttl: 15
+
+
 autoscaling:
   enabled: false
   minReplicas: 1
@@ -87,3 +85,10 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+
+app:
+  env_vars:
+    DEBUG: false
+    USE_TLS: false
+    CACHE_TTL: 3600

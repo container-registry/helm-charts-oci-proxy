@@ -1,0 +1,51 @@
+ingress:
+  enabled: true
+  #className: "traefik"
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: 'true'
+  hosts:
+    - host: chartproxy.container-registry.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: chartproxy-tls
+      hosts:
+        - chartproxy.container-registry.com
+
+resources:
+  limits:
+    memory: 1024Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# persistence
+persistence:
+  enabled: false
+  size: 5Gi
+  # storageClass: "-"
+  accessMode: ReadWriteOnce
+  annotations: {}
+# custom app values
+
+app:
+  debug: false
+  useTLS: false
+  cache_ttl: 3600
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

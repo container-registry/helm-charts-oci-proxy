@@ -39,7 +39,7 @@ spec:
         - name: {{ .Chart.Name }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -56,11 +56,9 @@ spec:
               port: http
               scheme: {{- if .Values.app.useTLS }} HTTPS {{ else }} HTTP {{- end }}
           env:
-            - name: USE_TLS
-              value: {{ quote .Values.app.useTLS }}
-            - name: DEBUG
-              value: {{ quote .Values.app.debug }}
-            - CACHE_TTL = {{ quote .Values.app.cache_ttl }}
+            {{- range $key, $value := .Values.app.env_vars }}
+            - name: {{ $key }}
+              value: {{ $value | quote}}{{- end }}
           volumeMounts:
             - name: data
               mountPath: /var/data
