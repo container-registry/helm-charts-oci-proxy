@@ -15,7 +15,6 @@ build_push_image() {
 }
 
 build_push_chart() {
-  git_commit=$(git rev-parse --short HEAD)
   helm package chart
   helm push helm-charts-oci-proxy-1.0.0.tgz oci://8gears.container-registry.com/library
 }
