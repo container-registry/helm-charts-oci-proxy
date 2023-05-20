@@ -65,12 +65,6 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
 			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
 
-			dbLocation := env.GetString("DB_LOCATION", "/var/data/fstore")
-
-			if err := os.MkdirAll(dbLocation, os.ModePerm); err != nil {
-				log.Fatalln(err)
-			}
-
 			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 			if err != nil {
 				l.Fatalln(err)
@@ -102,7 +96,6 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			//blobsHandler = badger2.NewHandler(db)
 			blobsHandler = mem.NewMemHandler()
 			//blobsHandler = file.NewHandler(dbLocation)
-
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
 				Handler: registry.New(ctx,

@@ -32,7 +32,7 @@ type Registry struct {
 func (r *Registry) v2(resp http.ResponseWriter, req *http.Request) *errors.RegError {
 	/// debug //
 	if req.URL.Path == "/" || req.URL.Path == "" {
-		return r.debugHandler(resp)
+		return r.homeHandler(resp, req)
 	}
 	if req.URL.Path == "/api/version" {
 		return r.versionHandler(resp)
@@ -95,25 +95,8 @@ func (r *Registry) harborInfoHandler(resp http.ResponseWriter) *errors.RegError 
 	return nil
 }
 
-func (r *Registry) debugHandler(resp http.ResponseWriter) *errors.RegError {
-	if !r.debug {
-		return nil
-	}
-	//
-	//r.Manifests.lock.Lock()
-	//r.Blobs.lock.Lock()
-	//
-	//defer r.Blobs.lock.Unlock()
-	//defer r.Manifests.lock.Unlock()
-	//
-	//response := struct {
-	//	Manifests map[string]map[string]registry2.Manifest `json:"manifests"`
-	//	Blobs     map[string][]byte                        `json:"blobs"`
-	//}{
-	//	Manifests: r.Manifests.manifests,
-	//	Blobs:     r.Blobs.BlobHandler.Debug(),
-	//}
-	//_ = prettyEncode(response, resp)
+func (r *Registry) homeHandler(w http.ResponseWriter, req *http.Request) *errors.RegError {
+	http.Redirect(w, req, "https://container-registry.com/helm-charts-oci-proxy/", 302)
 	return nil
 }
 

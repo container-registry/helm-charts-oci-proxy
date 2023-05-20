@@ -15,21 +15,20 @@
 package cmd
 
 import (
-  "github.com/spf13/cobra"
+	"github.com/spf13/cobra"
 )
 
 var Root = New("ocip", "start registry service")
 
 func New(use, short string) *cobra.Command {
 
-  root := &cobra.Command{
-    Use:   use,
-    Short: short,
-    RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Usage() },
-  }
-
-  root.AddCommand(
-    newCmdRegistry(),
-  )
-  return root
+	root := &cobra.Command{
+		Use:   use,
+		Short: short,
+		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Usage() },
+	}
+	root.AddCommand(
+		newCmdRegistry(),
+	)
+	return root
 }
