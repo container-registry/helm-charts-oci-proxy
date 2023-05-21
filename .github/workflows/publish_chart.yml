@@ -1,0 +1,41 @@
+
+name: "Build and Publish"
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/publish_chart.yml
+      - chart/**
+  push:
+    paths:
+      - .github/workflows/publish_chart.yml
+      - chart/**
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      CHART_VERSION: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Git Version Helm Chart
+        uses: codacy/git-version@2.5.4
+        with:
+          prefix: chart-
+          log-path: chart/
+
+      - name: Echo the Helm Chart Version
+        run: echo ${{ steps.version.outputs.version }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+
+      - name: Create Package
+        run: helm package chart
