@@ -11,7 +11,7 @@ on:
       - .github/workflows/publish_chart.yml
       - chart/**
     branches:
-      - master
+      - main
 
 jobs:
   build:
@@ -26,13 +26,14 @@ jobs:
           fetch-depth: 0
 
       - name: Git Version Helm Chart
+        id: version
         uses: codacy/git-version@2.5.4
         with:
           prefix: chart-
           log-path: chart/
 
       - name: Echo the Helm Chart Version
-        run: echo ${{ steps.version.outputs.version }}
+        run: echo "chart version is -> ${{ steps.version.outputs.version }}"
 
       - name: Install Helm
         uses: azure/setup-helm@v3
