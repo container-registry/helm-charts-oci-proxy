@@ -13,7 +13,7 @@ This proxy was primary designed after Harbor 2.8 removed support for [Chart Repo
 
 * Store all 3rd party public Helm Charts in your OCI compliant registry. While you can switch the storage and distribution of your Helm Charts easily, it is close to impossible to do so for all sorts of 3rd party Helm Charts.
 * Simplify your workflow and tooling by only using the OCI Helm Chart and not a mix of both
-* Use it in combination with [Skopeo](https://github.com/containers/skopeo) to copy Helm Charts into your OIC registry of choice.
+* Use it in combination with [Skopeo](https://github.com/containers/skopeo) to copy Helm Charts into your OCI registry of choice.
 
 ## Usage
 
