@@ -1,6 +1,7 @@
-FROM golang:1.20-alpine as build-env
+FROM cgr.dev/chainguard/go:latest as build-env
+
 ENV CGO_ENABLED=0
-WORKDIR /root
+WORKDIR /app
 
 COPY go.mod .
 COPY go.sum .
@@ -10,12 +11,10 @@ COPY . .
 #RUN ./do.sh tests
 RUN ./do.sh build
 
-FROM alpine
-RUN apk add ca-certificates
-WORKDIR /root
+FROM cgr.dev/chainguard/wolfi-base
 ENV PORT=9000
 ENV USE_TLS=false
-COPY --from=build-env /root/.bin/proxy .
-COPY --from=build-env /root/certs ./certs
+COPY --from=build-env /app/.bin/proxy /proxy
+USER 65534
 EXPOSE 9000
 CMD ["/bin/sh", "-c", "./proxy registry serve"]
