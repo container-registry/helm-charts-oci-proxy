@@ -16,7 +16,7 @@ build_push_image() {
 
 build_push_chart() {
   helm package chart
-  helm push helm-charts-oci-proxy-1.0.0.tgz oci://8gears.container-registry.com/library
+  helm push helm-charts-oci-proxy-1.1.0.tgz oci://8gears.container-registry.com/library
 }
 
 
