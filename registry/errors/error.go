@@ -16,6 +16,7 @@ package errors
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 )
 
@@ -23,6 +24,10 @@ type RegError struct {
 	Status  int
 	Code    string
 	Message string
+}
+
+func (r *RegError) Error() string {
+	return fmt.Sprintf("error: status: %d; code: %s; %s", r.Status, r.Code, r.Message)
 }
 
 func (r *RegError) Write(resp http.ResponseWriter) error {

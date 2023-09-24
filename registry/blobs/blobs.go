@@ -7,8 +7,8 @@ import (
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/sirupsen/logrus"
 	"io"
-	"log"
 	"net/http"
 	"path"
 	"strings"
@@ -23,14 +23,14 @@ type Blobs struct {
 	// Each upload gets a unique id that writes occur to until finalized.
 	// Temporary storage
 	lock sync.Mutex
-	log  *log.Logger
+	log  logrus.StdLogger
 }
 
-func NewBlobs(blobHandler handler.BlobHandler, log *log.Logger) *Blobs {
+func NewBlobs(blobHandler handler.BlobHandler, log logrus.StdLogger) *Blobs {
 	return &Blobs{handler: blobHandler, log: log}
 }
 
-func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) *errors.RegError {
+func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 	ctx := req.Context()
 
 	elem := strings.Split(req.URL.Path, "/")

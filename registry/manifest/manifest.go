@@ -9,10 +9,9 @@ import (
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
-	"github.com/dgraph-io/ristretto"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/sirupsen/logrus"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -39,25 +38,22 @@ type Manifest struct {
 
 type Manifests struct {
 	// maps repo -> Manifest tag/digest -> Manifest
-	manifests map[string]map[string]Manifest
-	lock      sync.Mutex
-	log       *log.Logger
-
-	debug bool
-
-	indexCache  *ristretto.Cache
+	manifests   map[string]map[string]Manifest
+	lock        sync.Mutex
+	log         logrus.StdLogger
+	cache       Cache
 	blobHandler handler.BlobHandler
-	cacheTTL    int
+	config      Config
 }
 
-func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, cacheTTL int, blobHandler handler.BlobHandler, l *log.Logger) *Manifests {
+func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
 	ma := &Manifests{
-		debug:       debug,
+
 		manifests:   map[string]map[string]Manifest{},
-		indexCache:  indexCache,
 		blobHandler: blobHandler,
-		log:         l,
-		cacheTTL:    cacheTTL,
+		log:         log,
+		config:      config,
+		cache:       cache,
 	}
 
 	go func() {
@@ -66,13 +62,13 @@ func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, 
 		for {
 			select {
 			case <-ticker.C:
-				if ma.debug {
+				if ma.config.Debug {
 					ma.log.Println("cleanup cycle")
 				}
 				ma.lock.Lock()
 				for _, m := range ma.manifests {
 					for k, v := range m {
-						if v.CreatedAt.Before(time.Now().Add(-time.Second * time.Duration(ma.cacheTTL))) {
+						if v.CreatedAt.Before(time.Now().Add(-ma.config.CacheTTL)) {
 							// delete
 							delete(m, k)
 							if delHandler, ok := ma.blobHandler.(handler.BlobDeleteHandler); ok {
@@ -81,11 +77,11 @@ func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, 
 									if err != nil {
 										continue
 									}
-									if ma.debug {
-										l.Printf("deleting blob %s", h.String())
+									if ma.config.Debug {
+										log.Printf("deleting blob %s", h.String())
 									}
 									if err = delHandler.Delete(ctx, "", h); err != nil {
-										l.Println(err)
+										log.Println(err)
 									}
 								}
 							}
@@ -104,7 +100,7 @@ func NewManifests(ctx context.Context, debug bool, indexCache *ristretto.Cache, 
 
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-an-image
-func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) *errors.RegError {
+func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	elem := strings.Split(req.URL.Path, "/")
 
 	if len(elem) < 3 {
@@ -224,7 +220,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) *errors.
 	}
 }
 
-func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) *errors.RegError {
+func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) error {
 	elem := strings.Split(req.URL.Path, "/")
 	if len(elem) < 4 {
 		return &errors.RegError{
@@ -349,7 +345,7 @@ func (m *Manifests) Write(repo string, name string, n Manifest) error {
 	return nil
 }
 
-func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) *errors.RegError {
+func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) error {
 	query := req.URL.Query()
 	nStr := query.Get("n")
 	n := 10000

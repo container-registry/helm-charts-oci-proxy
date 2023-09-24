@@ -17,8 +17,9 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/mem"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/manifest"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/registry"
 	"github.com/dgraph-io/ristretto"
 	"k8s.io/utils/env"
@@ -60,7 +61,10 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			}
 
 			debug, _ := env.GetBool("DEBUG", false)
-			cacheTTL, _ := env.GetInt("CACHE_TTL", 60)
+			cacheTTL, _ := env.GetInt("MANIFEST_CACHE_TTL", 60)              // 1 minute
+			indexCacheTTL, _ := env.GetInt("INDEX_CACHE_TTL", 3600*4)        // 4 hours
+			indexErrorCacheTTL, _ := env.GetInt("INDEX_ERROR_CACHE_TTL", 30) // 30 seconds
+
 			useTLS, _ := env.GetBool("USE_TLS", false)
 			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
 			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
@@ -81,30 +85,25 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				l.Fatalln(err)
 			}
 
-			//db, err := badger.Open(badger.DefaultOptions(dbLocation).
-			//	WithCompression(options.None).
-			//	WithBloomFalsePositive(0).
-			//	WithMemTableSize(1024 * 1204 * 8), //8mb instead of 64
-			//)
-			//if err != nil {
-			//	log.Fatal(err)
-			//}
-			//defer db.Close()
+			blobsHandler := mem.NewMemHandler()
 
-			var blobsHandler handler.BlobHandler
+			manifests := manifest.NewManifests(ctx, blobsHandler, manifest.Config{
+				Debug:              debug,
+				CacheTTL:           time.Duration(cacheTTL) * time.Second,
+				IndexCacheTTL:      time.Duration(indexCacheTTL) * time.Second,
+				IndexErrorCacheTTl: time.Duration(indexErrorCacheTTL) * time.Second,
+			}, indexCache, l)
 
-			//blobsHandler = badger2.NewHandler(db)
-			blobsHandler = mem.NewMemHandler()
+			blobsHttpHandler := blobs.NewBlobs(blobsHandler, l)
 			//blobsHandler = file.NewHandler(dbLocation)
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
-				Handler: registry.New(ctx,
-					registry.Debug(debug),
-					registry.CacheTTL(cacheTTL),
-					registry.Logger(l),
-					registry.IndexCache(indexCache),
-					registry.BlobsHandler(blobsHandler),
-				),
+				Handler: registry.New(
+					manifests.Handle,
+					blobsHttpHandler.Handle,
+					manifests.HandleTags,
+					manifests.HandleCatalog,
+					registry.Debug(debug), registry.Logger(l)),
 			}
 
 			errCh := make(chan error)
