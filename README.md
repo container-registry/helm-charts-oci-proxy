@@ -115,7 +115,9 @@ There are not many options in configure the application except the following.
 
 * `PORT` - specifies port, default `9000`
 * `DEBUG` - enabled debug if it's `TRUE`
-* `CACHE_TTL` - for how many seconds we have to store manifest and related blobs, default value is 60
+* `MANIFEST_CACHE_TTL` - for how long we have stores manifest and its related blobs, the default value is `60` seconds.
+* `INDEX_CACHE_TTL` - for how long we store chart index file content, the default value is `14400` seconds (4h)
+* `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. The default value is `30` seconds.
 * `USE_TLS` - enabled HTTP over TLS
 
 
