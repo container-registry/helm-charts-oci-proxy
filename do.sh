@@ -31,6 +31,11 @@ run() {
 tests() {
   go test -v ./...
 }
+
+list_of_actions() {
+  act -l --container-architecture linux/amd64
+}
+
 "$@" # <- execute the task
 
 [ "$#" -gt 0 ] || printf "Usage:\n\t./do.sh %s\n" "($(compgen -A function | grep '^[^_]' | paste -sd '|' -))"
