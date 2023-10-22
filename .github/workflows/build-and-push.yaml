@@ -40,7 +40,7 @@ jobs:
       - name: Run Unit Tests
         id: run-tests
         run: |
-          ./do.sh test
+          ./do.sh tests
 
   prepare:
     name: Prepare
