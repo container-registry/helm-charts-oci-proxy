@@ -50,20 +50,10 @@ jobs:
       env_name: ${{ env.ENV_NAME }}
       tag_name:  ${{ env.TAG_NAME }}
     steps:
-      - name: Export Variables
-        run: echo "DATETIME=$(date +%s)" >> $GITHUB_ENV
-
-      - name: Staging (merge)
-        if: github.event_name != 'pull_request' && github.ref_name == 'main'
+      - name: Staging
         run: |
           echo "ENV_NAME=staging" >> "$GITHUB_ENV"
-          echo "TAG_NAME=staging-${{ env.DATETIME }}" >> "$GITHUB_ENV"
-
-      - name: Staging (PR)
-        if: github.event_name == 'pull_request' && github.head_ref == 'main'
-        run: |
-          echo "ENV_NAME=staging" >> "$GITHUB_ENV"
-          echo "TAG_NAME=staging-${{ env.DATETIME }}" >> "$GITHUB_ENV"
+          echo "TAG_NAME=${GITHUB_REF#refs/*/}" >> "$GITHUB_ENV"
 
       - name: Release Tag
         if: startsWith(github.event.ref, 'refs/tags/v')
