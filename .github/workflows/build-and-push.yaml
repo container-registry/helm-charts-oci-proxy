@@ -1,0 +1,101 @@
+name: "Build container images"
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+  push:
+    tags:
+      - 'v*.*.*'
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+jobs:
+  tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - uses: actions/setup-go@v3
+        with:
+          go-version: '1.20'
+      - name: Setup Go Cache Paths
+        id: go-cache-paths
+        run: |
+          echo "go-build=$(go env GOCACHE)" >>$GITHUB_OUTPUT
+          echo "go-mod=$(go env GOMODCACHE)" >>$GITHUB_OUTPUT
+      - name: Go Build Cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.go-cache-paths.outputs.go-build }}
+          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
+      - name: Go Mod Cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ steps.go-cache-paths.outputs.go-mod }}
+          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+      - name: Run Unit Tests
+        id: run-tests
+        run: |
+          ./do.sh tests
+
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    needs: [tests]
+    outputs:
+      env_name: ${{ env.ENV_NAME }}
+      tag_name:  ${{ env.TAG_NAME }}
+    steps:
+      - name: Export Variables
+        run: echo "DATETIME=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Staging (merge)
+        if: github.event_name != 'pull_request' && github.ref_name == 'main'
+        run: |
+          echo "ENV_NAME=staging" >> "$GITHUB_ENV"
+          echo "TAG_NAME=staging-${{ env.DATETIME }}" >> "$GITHUB_ENV"
+
+      - name: Staging (PR)
+        if: github.event_name == 'pull_request' && github.head_ref == 'main'
+        run: |
+          echo "ENV_NAME=staging" >> "$GITHUB_ENV"
+          echo "TAG_NAME=staging-${{ env.DATETIME }}" >> "$GITHUB_ENV"
+
+      - name: Release Tag
+        if: startsWith(github.event.ref, 'refs/tags/v')
+        run: |
+          echo "ENV_NAME=production" >> "$GITHUB_ENV"
+          TAG=${GITHUB_REF#refs/*/}
+          echo "TAG_NAME=${TAG#v}" >> "$GITHUB_ENV"
+
+  build-container:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: prepare
+    environment: ${{ needs.prepare.outputs.env_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.REGISTRY_ADDR }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build & push container image
+        id: build-container
+        env:
+          REPOSITORY: ${{ vars.SERVER_IMAGE_REPO }}
+          IMAGE_TAG: ${{ needs.prepare.outputs.tag_name }}
+        run: |
+          docker build --build-arg="VERSION=$IMAGE_TAG" -t $REPOSITORY:$IMAGE_TAG .
+          docker push $REPOSITORY:$IMAGE_TAG
+
+
+
+
