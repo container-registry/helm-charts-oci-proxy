@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"sigs.k8s.io/yaml"
 	"strings"
-	"time"
 )
 
 func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string) *errors.RegError {
@@ -68,7 +67,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 
 	u, err := url.Parse(chartVer.URLs[0])
 	if err != nil {
-		errors.RegErrInternal(err)
+		return errors.RegErrInternal(err)
 	}
 	if u.IsAbs() {
 		downloadUrl = u.String()
@@ -94,6 +93,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 			ocispec.AnnotationTitle: "$config",
 		},
 	}
+
 	err = memStore.Push(ctx, desc, bytes.NewReader(configData))
 	if err != nil {
 		return errors.RegErrInternal(err)
@@ -159,21 +159,19 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 		err error
 	}
 
-	if m.indexCache == nil {
-		return m.downloadIndex(repoURLPath)
-	}
-
-	c, ok := m.indexCache.Get(repoURLPath)
+	c, ok := m.cache.Get(repoURLPath)
 
 	if !ok || c == nil {
 		// nothing in the cache
 		res := &cacheResp{}
 		res.c, res.err = m.downloadIndex(repoURLPath)
+
+		var ttl = m.config.IndexCacheTTL
 		if res.err != nil {
-			m.indexCache.SetWithTTL(repoURLPath, res, 10, time.Second*5)
-		} else {
-			m.indexCache.Set(repoURLPath, res, 10)
+			// cache error too to avoid external resource exhausting
+			ttl = m.config.IndexErrorCacheTTl
 		}
+		m.cache.SetWithTTL(repoURLPath, res, 1000, ttl)
 		return res.c, res.err
 	}
 
@@ -186,7 +184,7 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 
 func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 	url := fmt.Sprintf("https://%s/index.yaml", repoURLPath)
-	if m.debug {
+	if m.config.Debug {
 		m.log.Printf("download index: %s\n", url)
 	}
 	data, err := m.getIndexBytes(url)
@@ -223,25 +221,25 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 }
 
 func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
-	if m.indexCache == nil {
-		return m.download(url)
-	}
+
 	type cacheResp struct {
 		c   []byte
 		err error
 	}
 
-	c, ok := m.indexCache.Get(url)
+	c, ok := m.cache.Get(url)
 
 	if !ok || c == nil {
 		// nothing in the cache
 		res := &cacheResp{}
 		res.c, res.err = m.download(url)
+
+		var ttl = m.config.IndexCacheTTL
 		if res.err != nil {
-			m.indexCache.SetWithTTL(url, res, 10, time.Second*5)
-		} else {
-			m.indexCache.Set(url, res, 10)
+			// cache error too to avoid external resource exhausting
+			ttl = m.config.IndexErrorCacheTTl
 		}
+		m.cache.SetWithTTL(url, res, 1000, ttl)
 		return res.c, res.err
 	}
 
@@ -254,7 +252,7 @@ func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
 }
 
 func (m *Manifests) download(url string) ([]byte, error) {
-	if m.debug {
+	if m.config.Debug {
 		m.log.Printf("downloading : %s\n", url)
 	}
 	resp, err := http.Get(url)
