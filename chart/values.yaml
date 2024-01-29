@@ -1,5 +1,8 @@
 replicaCount: 1
 
+deploymentStrategy:
+  type: RollingUpdate
+
 image:
   repository: 8gears.container-registry.com/library/helm-charts-oci-proxy
   pullPolicy: Always
