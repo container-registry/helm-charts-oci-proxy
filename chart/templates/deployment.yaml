@@ -11,6 +11,10 @@ spec:
   selector:
     matchLabels:
       {{- include "ocip.selectorLabels" . | nindent 6 }}
+  {{- with .Values.deploymentStrategy }}
+  strategy:
+    {{- toYaml . | trim | nindent 4 }}
+  {{- end }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
