@@ -51,7 +51,7 @@ jobs:
       tag_name:  ${{ env.TAG_NAME }}
     steps:
       - name: Export Variables
-        run: echo "DATETIME=$(date +%s)" >> $GITHUB_ENV
+        run: echo "DATETIME=$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
 
       - name: Staging (merge)
         if: github.event_name != 'pull_request' && github.ref_name == 'main'
