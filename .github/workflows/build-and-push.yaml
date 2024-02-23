@@ -94,12 +94,8 @@ jobs:
       - name: Build & push container image
         id: build-container
         env:
-          REPOSITORY: ${{ REGISTRY_ADDR }}/library/helm-charts-oci-proxy
+          REPOSITORY: ${{ env.REGISTRY_ADDR }}/library/helm-charts-oci-proxy
           IMAGE_TAG: ${{ needs.prepare.outputs.tag_name }}
         run: |
           docker build --build-arg="VERSION=$IMAGE_TAG" -t $REPOSITORY:$IMAGE_TAG .
           docker push $REPOSITORY:$IMAGE_TAG
-
-
-
-
