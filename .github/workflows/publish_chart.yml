@@ -36,6 +36,15 @@ jobs:
 
       - name: Install Helm
         uses: azure/setup-helm@v3
+        with:
+          version: v3.14.0
 
-      - name: Create Package
-        run: helm package chart
+      - name: Create Chart Package
+        run: helm package chart  --version ${{ steps.version.outputs.version }}
+
+      - name: Login to Registry
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ env.REGISTRY_ADDR }} --username ${{ env.REGISTRY_USERNAME }} --password-stdin
+
+      - name: Push Packaged Chart to Registry
+        run: helm push helm-charts-oci-proxy-${{ steps.version.outputs.version }}.tgz oci://${{ env.REGISTRY_ADDR }}/library
+
