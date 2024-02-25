@@ -51,12 +51,12 @@ spec:
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /
+              path: /api/version
               port: http
               scheme: {{- if .Values.app.useTLS }} HTTPS {{ else }} HTTP {{- end }}
           readinessProbe:
             httpGet:
-              path: /
+              path: /api/version
               port: http
               scheme: {{- if .Values.app.useTLS }} HTTPS {{ else }} HTTP {{- end }}
           env:
