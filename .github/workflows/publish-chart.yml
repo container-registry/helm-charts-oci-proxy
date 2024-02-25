@@ -15,8 +15,6 @@ on:
 jobs:
   publish-chart:
     runs-on: ubuntu-latest
-    outputs:
-      CHART_VERSION: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -24,27 +22,17 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
-      - name: Git Version Helm Chart
-        id: version
-        uses: codacy/git-version@2.5.4
-        with:
-          prefix: chart-
-          log-path: chart/
-
-      - name: Echo the Helm Chart Version
-        run: echo "chart version is -> ${{ steps.version.outputs.version }}"
-
       - name: Install Helm
         uses: azure/setup-helm@v3
         with:
           version: v3.14.0
 
       - name: Create Chart Package
-        run: helm package chart  --version ${{ steps.version.outputs.version }}
+        run: helm package chart -d ./tmp
 
       - name: Login to Registry
-        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ env.REGISTRY_ADDR }} --username ${{ env.REGISTRY_USERNAME }} --password-stdin
+        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ vars.REGISTRY_ADDR }} --username ${{ vars.REGISTRY_USERNAME }} --password-stdin
 
       - name: Push Packaged Chart to Registry
-        run: helm push helm-charts-oci-proxy-${{ steps.version.outputs.version }}.tgz oci://${{ env.REGISTRY_ADDR }}/library
+        run: helm push ./tmp/* oci://${{ env.REGISTRY_ADDR }}/library
 
