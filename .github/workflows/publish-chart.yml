@@ -34,5 +34,5 @@ jobs:
         run: echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ vars.REGISTRY_ADDR }} --username ${{ vars.REGISTRY_USERNAME }} --password-stdin
 
       - name: Push Packaged Chart to Registry
-        run: helm push ./tmp/* oci://${{ env.REGISTRY_ADDR }}/library
+        run: helm push ./tmp/* oci://${{ vars.REGISTRY_ADDR }}/library
 
