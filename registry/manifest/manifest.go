@@ -46,8 +46,8 @@ type Manifests struct {
 	config      Config
 }
 
-func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
-	ma := &Manifests{
+func NewManifests(blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
+	return &Manifests{
 
 		manifests:   map[string]map[string]Manifest{},
 		blobHandler: blobHandler,
@@ -55,52 +55,51 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		config:      config,
 		cache:       cache,
 	}
+}
 
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if ma.config.Debug {
-					ma.log.Println("cleanup cycle")
-				}
-				ma.lock.Lock()
-				for _, m := range ma.manifests {
-					for k, v := range m {
-						if v.CreatedAt.Before(time.Now().Add(-ma.config.CacheTTL)) {
-							// delete
-							delete(m, k)
-							if delHandler, ok := ma.blobHandler.(handler.BlobDeleteHandler); ok {
-								for _, ref := range v.Refs {
-									h, err := v1.NewHash(ref)
-									if err != nil {
-										continue
-									}
-									if ma.config.Debug {
-										log.Printf("deleting blob %s", h.String())
-									}
-									if err = delHandler.Delete(ctx, "", h); err != nil {
-										log.Println(err)
-									}
+func (manifest *Manifests) Run(ctx context.Context) error {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if manifest.config.Debug {
+				manifest.log.Println("cleanup cycle")
+			}
+			manifest.lock.Lock()
+			for _, m := range manifest.manifests {
+				for k, v := range m {
+					if v.CreatedAt.Before(time.Now().Add(-manifest.config.CacheTTL)) {
+						// delete
+						delete(m, k)
+						if delHandler, ok := manifest.blobHandler.(handler.BlobDeleteHandler); ok {
+							for _, ref := range v.Refs {
+								h, err := v1.NewHash(ref)
+								if err != nil {
+									manifest.log.Printf("hash err: %v", err)
+									continue
+								}
+								if manifest.config.Debug {
+									manifest.log.Printf("deleting blob %s", h.String())
+								}
+								if err = delHandler.Delete(ctx, "", h); err != nil {
+									manifest.log.Println(err)
 								}
 							}
 						}
 					}
 				}
-				ma.lock.Unlock()
-			case <-ctx.Done():
-				return
 			}
+			manifest.lock.Unlock()
+		case <-ctx.Done():
+			return nil
 		}
-	}()
-
-	return ma
+	}
 }
 
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-an-image
-func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
+func (manifest *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	elem := strings.Split(req.URL.Path, "/")
 
 	if len(elem) < 3 {
@@ -130,26 +129,26 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 
 	switch req.Method {
 	case http.MethodGet:
-		m.lock.Lock()
-		defer m.lock.Unlock()
+		manifest.lock.Lock()
+		defer manifest.lock.Unlock()
 
 		var prepared bool
 
-		c, ok := m.manifests[repo]
+		c, ok := manifest.manifests[repo]
 		if !ok {
-			err := m.prepareChart(req.Context(), repo, target)
+			err := manifest.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
 			prepared = true
 			// re-find
-			c = m.manifests[repo]
+			c = manifest.manifests[repo]
 		}
 
 		ma, ok := c[target]
 		if !ok {
 			if !prepared {
-				err := m.prepareChart(req.Context(), repo, target)
+				err := manifest.prepareChart(req.Context(), repo, target)
 				if err != nil {
 					return err
 				}
@@ -178,22 +177,22 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 		return nil
 
 	case http.MethodHead:
-		m.lock.Lock()
-		defer m.lock.Unlock()
-		if _, ok := m.manifests[repo]; !ok {
+		manifest.lock.Lock()
+		defer manifest.lock.Unlock()
+		if _, ok := manifest.manifests[repo]; !ok {
 
-			err := m.prepareChart(req.Context(), repo, target)
+			err := manifest.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
 		}
-		ma, ok := m.manifests[repo][target]
+		ma, ok := manifest.manifests[repo][target]
 		if !ok {
-			err := m.prepareChart(req.Context(), repo, target)
+			err := manifest.prepareChart(req.Context(), repo, target)
 			if err != nil {
 				return err
 			}
-			ma, ok = m.manifests[repo][target]
+			ma, ok = manifest.manifests[repo][target]
 			if !ok {
 				// we failed
 				return &errors.RegError{
@@ -220,7 +219,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	}
 }
 
-func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) error {
+func (manifest *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) error {
 	elem := strings.Split(req.URL.Path, "/")
 	if len(elem) < 4 {
 		return &errors.RegError{
@@ -250,22 +249,22 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 			Message: "We don't understand your method + url",
 		}
 	}
-	m.lock.Lock()
-	defer m.lock.Unlock()
+	manifest.lock.Lock()
+	defer manifest.lock.Unlock()
 
-	c, ok := m.manifests[fullRepo]
+	c, ok := manifest.manifests[fullRepo]
 	if !ok {
-		err := m.prepareChart(req.Context(), fullRepo, "")
+		err := manifest.prepareChart(req.Context(), fullRepo, "")
 		if err != nil {
 			return err
 		}
-		c, _ = m.manifests[fullRepo]
+		c, _ = manifest.manifests[fullRepo]
 	}
 
 	repoPath := strings.Join(repoParts[:len(repoParts)-1], "/")
 	var tags []string
 
-	index, _ := m.GetIndex(repoPath)
+	index, _ := manifest.GetIndex(repoPath)
 
 	if index != nil {
 		if versions, ok := index.Entries[repoParts[len(repoParts)-1]]; ok {
@@ -321,9 +320,9 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	return nil
 }
 
-func (m *Manifests) Read(repo string, name string) (Manifest, error) {
+func (manifest *Manifests) Read(repo string, name string) (Manifest, error) {
 
-	mRepo, ok := m.manifests[repo]
+	mRepo, ok := manifest.manifests[repo]
 	if !ok {
 		return Manifest{}, fmt.Errorf("repository not found")
 	}
@@ -334,18 +333,18 @@ func (m *Manifests) Read(repo string, name string) (Manifest, error) {
 	return ma, nil
 }
 
-func (m *Manifests) Write(repo string, name string, n Manifest) error {
+func (manifest *Manifests) Write(repo string, name string, n Manifest) error {
 
-	mRepo, ok := m.manifests[repo]
+	mRepo, ok := manifest.manifests[repo]
 	if !ok {
 		mRepo = map[string]Manifest{}
-		m.manifests[repo] = mRepo
+		manifest.manifests[repo] = mRepo
 	}
 	mRepo[name] = n
 	return nil
 }
 
-func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) error {
+func (manifest *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) error {
 	query := req.URL.Query()
 	nStr := query.Get("n")
 	n := 10000
@@ -374,7 +373,7 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) e
 	if len(elems) > 2 {
 		// we have repo
 		repo := strings.Join(elems[0:len(elems)-2], "/")
-		index, _ := m.GetIndex(repo)
+		index, _ := manifest.GetIndex(repo)
 		if index != nil {
 			// show index's content instead of local
 			for r := range index.Entries {
@@ -387,11 +386,11 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) e
 		}
 
 	} else {
-		m.lock.Lock()
-		defer m.lock.Unlock()
+		manifest.lock.Lock()
+		defer manifest.lock.Unlock()
 
 		// TODO: implement pagination
-		for key := range m.manifests {
+		for key := range manifest.manifests {
 			if countRepos >= n {
 				break
 			}

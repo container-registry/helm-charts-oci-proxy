@@ -1,14 +1,20 @@
 package registry
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/mem"
+	rerrros "github.com/container-registry/helm-charts-oci-proxy/registry/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/helper"
+	"github.com/container-registry/helm-charts-oci-proxy/registry/manifest"
 	"github.com/sirupsen/logrus"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -16,47 +22,59 @@ type Registry struct {
 	log logrus.StdLogger
 
 	// to operate blobs directly from registry
-	blobs Handler `json:"blobs"`
+	blobs *blobs.Blobs
 	//
-	manifests Handler `json:"manifests"`
-	tags      Handler
-	catalog   Handler
+	manifests *manifest.Manifests
 
-	debug bool
+	cache manifest.Cache
+
+	manifestCacheTTL int
+	//
+	indexCacheTTL      int
+	indexErrorCacheTTL int
+	debug              bool
+
+	pathPrefix string
+}
+
+func (r *Registry) path(req *http.Request) string {
+	return strings.TrimPrefix(req.URL.Path, r.pathPrefix)
 }
 
 func (r *Registry) v2(resp http.ResponseWriter, req *http.Request) error {
 	/// debug //
-	if req.URL.Path == "/" || req.URL.Path == "" {
+	path := r.path(req)
+
+	if path == "/" || path == "" {
 		return r.homeHandler(resp, req)
 	}
-	if req.URL.Path == "/api/version" {
+	if path == "/api/version" {
 		return r.versionHandler(resp)
 	}
-	if req.URL.Path == "/api/systeminfo" || req.URL.Path == "/api/v2.0/systeminfo" {
+	if path == "/api/systeminfo" || path == "/api/v2.0/systeminfo" {
 		return r.harborInfoHandler(resp)
 	}
 	if helper.IsBlob(req) {
-		return r.blobs(resp, req)
+		return r.blobs.Handle(resp, req)
 	}
 	if helper.IsManifest(req) {
-		return r.manifests(resp, req)
+		return r.manifests.Handle(resp, req)
 	}
 	if helper.IsTags(req) {
-		return r.tags(resp, req)
+		return r.manifests.HandleTags(resp, req)
 	}
 	if helper.IsCatalog(req) {
-		return r.catalog(resp, req)
+		return r.manifests.HandleCatalog(resp, req)
 	}
 	if helper.IsV2(req) {
 		resp.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 		resp.WriteHeader(200)
 		return nil
 	}
-	return &errors.RegError{
+	return &rerrros.RegError{
 		Status:  http.StatusNotFound,
 		Code:    "METHOD_UNKNOWN",
-		Message: fmt.Sprintf("We don't understand your URL: %s", req.URL.Path),
+		Message: fmt.Sprintf("We don't understand your URL: %s", path),
 	}
 }
 
@@ -69,7 +87,7 @@ func (r *Registry) versionHandler(resp http.ResponseWriter) error {
 	}
 	resp.WriteHeader(200)
 	if err := prettyEncode(res, resp); err != nil {
-		return errors.RegErrInternal(err)
+		return rerrros.RegErrInternal(err)
 	}
 	return nil
 }
@@ -85,7 +103,7 @@ func (r *Registry) harborInfoHandler(resp http.ResponseWriter) error {
 	}
 	resp.WriteHeader(200)
 	if err := prettyEncode(res, resp); err != nil {
-		return errors.RegErrInternal(err)
+		return rerrros.RegErrInternal(err)
 	}
 	return nil
 }
@@ -95,13 +113,12 @@ func (r *Registry) homeHandler(w http.ResponseWriter, req *http.Request) error {
 	return nil
 }
 
-func (r *Registry) root(resp http.ResponseWriter, req *http.Request) {
+func (r *Registry) Handle(resp http.ResponseWriter, req *http.Request) {
 	if err := r.v2(resp, req); err != nil {
-		if regErr, ok := err.(*errors.RegError); ok {
+		var regErr *rerrros.RegError
+		if errors.As(err, &regErr) {
 			r.log.Printf("%s %s %d %s %s", req.Method, req.URL, regErr.Status, regErr.Code, regErr.Message)
 			_ = regErr.Write(resp)
-		} else {
-			http.Error(resp, err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
@@ -110,22 +127,42 @@ func (r *Registry) root(resp http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// New returns a handler which implements the docker registry protocol.
+// New returns an instance of Registry
 // It should be registered at the site root.
-func New(manifests Handler, blobs Handler, tags Handler, catalog Handler, opts ...Option) http.Handler {
+func New(opts ...Option) *Registry {
+
 	r := &Registry{
-		manifests: manifests,
-		blobs:     blobs,
-		tags:      tags,
-		catalog:   catalog,
+		manifestCacheTTL:   60, // default values
+		indexCacheTTL:      3600 * 4,
+		indexErrorCacheTTL: 30,
 	}
+
 	for _, o := range opts {
 		o(r)
 	}
 	if r.log == nil {
 		r.log = log.Default()
 	}
-	return http.HandlerFunc(r.root)
+
+	if r.cache == nil {
+		r.log.Fatalln("no cache initialised")
+	}
+
+	blobsHandler := mem.NewMemHandler()
+
+	r.manifests = manifest.NewManifests(blobsHandler, manifest.Config{
+		Debug:              r.debug,
+		CacheTTL:           time.Duration(r.manifestCacheTTL) * time.Second,
+		IndexCacheTTL:      time.Duration(r.indexCacheTTL) * time.Second,
+		IndexErrorCacheTTl: time.Duration(r.indexErrorCacheTTL) * time.Second,
+	}, r.cache, r.log)
+
+	r.blobs = blobs.NewBlobs(blobsHandler, r.log)
+	return r
+}
+
+func (r *Registry) Run(ctx context.Context) error {
+	return r.manifests.Run(ctx)
 }
 
 // Option describes the available options
@@ -142,6 +179,33 @@ func Logger(l logrus.StdLogger) Option {
 func Debug(v bool) Option {
 	return func(r *Registry) {
 		r.debug = v
+	}
+}
+
+func ManifestCacheTTL(v int) Option {
+	return func(r *Registry) {
+		r.manifestCacheTTL = v
+	}
+}
+
+func IndexErrorCacheTTL(v int) Option {
+	return func(r *Registry) {
+		r.indexErrorCacheTTL = v
+	}
+}
+
+func Cache(c manifest.Cache) Option {
+	return func(r *Registry) {
+		r.cache = c
+	}
+}
+
+func PathPrefix(v string) Option {
+	return func(r *Registry) {
+		if v == "/" {
+			return
+		}
+		r.pathPrefix = v
 	}
 }
 

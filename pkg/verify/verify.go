@@ -21,10 +21,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/container-registry/helm-charts-oci-proxy/pkg/and"
 	"hash"
 	"io"
 
-	"github.com/container-registry/helm-charts-oci-proxy/and"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 

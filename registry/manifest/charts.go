@@ -21,7 +21,7 @@ import (
 	"strings"
 )
 
-func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string) *errors.RegError {
+func (manifest *Manifests) prepareChart(ctx context.Context, repo string, reference string) *errors.RegError {
 	elem := strings.Split(repo, "/")
 
 	if len(elem) < 2 {
@@ -31,7 +31,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	path := strings.Join(elem[:len(elem)-1], "/")
 	chart := elem[len(elem)-1]
 
-	index, err := m.GetIndex(path)
+	index, err := manifest.GetIndex(path)
 	if err != nil {
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
@@ -44,7 +44,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		reference = fmt.Sprintf("v%s", reference)
 	}
 
-	m.log.Printf("searching index for %s with reference %s\n", chart, reference)
+	manifest.log.Printf("searching index for %s with reference %s\n", chart, reference)
 	chartVer, err := index.Get(chart, reference)
 	if err != nil {
 		return &errors.RegError{
@@ -75,7 +75,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		downloadUrl = fmt.Sprintf("https://%s/%s", path, chartVer.URLs[0])
 	}
 
-	manifestData, err := m.download(downloadUrl)
+	manifestData, err := manifest.download(downloadUrl)
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
@@ -139,7 +139,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return nil
 	}
 
-	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), m.blobHandler.(handler.BlobPutHandler), m)
+	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), manifest.blobHandler.(handler.BlobPutHandler), manifest)
 	// push
 	if reference == "" {
 		err = oras.CopyGraph(ctx, memStore, dst, root, copyOptions.CopyGraphOptions)
@@ -152,26 +152,26 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	return nil
 }
 
-func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
+func (manifest *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 
 	type cacheResp struct {
 		c   *repo.IndexFile
 		err error
 	}
 
-	c, ok := m.cache.Get(repoURLPath)
+	c, ok := manifest.cache.Get(repoURLPath)
 
 	if !ok || c == nil {
 		// nothing in the cache
 		res := &cacheResp{}
-		res.c, res.err = m.downloadIndex(repoURLPath)
+		res.c, res.err = manifest.downloadIndex(repoURLPath)
 
-		var ttl = m.config.IndexCacheTTL
+		var ttl = manifest.config.IndexCacheTTL
 		if res.err != nil {
 			// cache error too to avoid external resource exhausting
-			ttl = m.config.IndexErrorCacheTTl
+			ttl = manifest.config.IndexErrorCacheTTl
 		}
-		m.cache.SetWithTTL(repoURLPath, res, 1000, ttl)
+		manifest.cache.SetWithTTL(repoURLPath, res, 1000, ttl)
 		return res.c, res.err
 	}
 
@@ -182,12 +182,12 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 	return res.c, res.err
 }
 
-func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
+func (manifest *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 	url := fmt.Sprintf("https://%s/index.yaml", repoURLPath)
-	if m.config.Debug {
-		m.log.Printf("download index: %s\n", url)
+	if manifest.config.Debug {
+		manifest.log.Printf("download index: %s\n", url)
 	}
-	data, err := m.getIndexBytes(url)
+	data, err := manifest.getIndexBytes(url)
 	if err != nil {
 		return nil, err
 	}
@@ -220,26 +220,26 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 	return i, nil
 }
 
-func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
+func (manifest *Manifests) getIndexBytes(url string) ([]byte, error) {
 
 	type cacheResp struct {
 		c   []byte
 		err error
 	}
 
-	c, ok := m.cache.Get(url)
+	c, ok := manifest.cache.Get(url)
 
 	if !ok || c == nil {
 		// nothing in the cache
 		res := &cacheResp{}
-		res.c, res.err = m.download(url)
+		res.c, res.err = manifest.download(url)
 
-		var ttl = m.config.IndexCacheTTL
+		var ttl = manifest.config.IndexCacheTTL
 		if res.err != nil {
 			// cache error too to avoid external resource exhausting
-			ttl = m.config.IndexErrorCacheTTl
+			ttl = manifest.config.IndexErrorCacheTTl
 		}
-		m.cache.SetWithTTL(url, res, 1000, ttl)
+		manifest.cache.SetWithTTL(url, res, 1000, ttl)
 		return res.c, res.err
 	}
 
@@ -251,9 +251,9 @@ func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
 
 }
 
-func (m *Manifests) download(url string) ([]byte, error) {
-	if m.config.Debug {
-		m.log.Printf("downloading : %s\n", url)
+func (manifest *Manifests) download(url string) ([]byte, error) {
+	if manifest.config.Debug {
+		manifest.log.Printf("downloading : %s\n", url)
 	}
 	resp, err := http.Get(url)
 	if err != nil {

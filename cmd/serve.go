@@ -17,19 +17,16 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs/handler/mem"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/manifest"
 	"github.com/container-registry/helm-charts-oci-proxy/registry/registry"
 	"github.com/dgraph-io/ristretto"
+	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 	"k8s.io/utils/env"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"time"
-
-	"github.com/spf13/cobra"
 )
 
 func newCmdRegistry() *cobra.Command {
@@ -61,7 +58,8 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			}
 
 			debug, _ := env.GetBool("DEBUG", false)
-			cacheTTL, _ := env.GetInt("MANIFEST_CACHE_TTL", 60)              // 1 minute
+
+			manifestCacheTTL, _ := env.GetInt("MANIFEST_CACHE_TTL", 60)      // 1 minute
 			indexCacheTTL, _ := env.GetInt("INDEX_CACHE_TTL", 3600*4)        // 4 hours
 			indexErrorCacheTTL, _ := env.GetInt("INDEX_ERROR_CACHE_TTL", 30) // 30 seconds
 
@@ -74,7 +72,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				l.Fatalln(err)
 			}
 
-			portI := listener.Addr().(*net.TCPAddr).Port
+			portInt := listener.Addr().(*net.TCPAddr).Port
 
 			indexCache, err := ristretto.NewCache(&ristretto.Config{
 				NumCounters: 1e7,       // number of keys to track frequency of (10M).
@@ -85,44 +83,45 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				l.Fatalln(err)
 			}
 
-			blobsHandler := mem.NewMemHandler()
+			containerRegistry := registry.New(registry.Cache(indexCache),
+				registry.IndexErrorCacheTTL(indexCacheTTL),
+				registry.ManifestCacheTTL(manifestCacheTTL),
+				registry.IndexErrorCacheTTL(indexErrorCacheTTL),
+				registry.Debug(debug),
+				registry.Logger(l),
+			)
 
-			manifests := manifest.NewManifests(ctx, blobsHandler, manifest.Config{
-				Debug:              debug,
-				CacheTTL:           time.Duration(cacheTTL) * time.Second,
-				IndexCacheTTL:      time.Duration(indexCacheTTL) * time.Second,
-				IndexErrorCacheTTl: time.Duration(indexErrorCacheTTL) * time.Second,
-			}, indexCache, l)
-
-			blobsHttpHandler := blobs.NewBlobs(blobsHandler, l)
-			//blobsHandler = file.NewHandler(dbLocation)
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
-				Handler: registry.New(
-					manifests.Handle,
-					blobsHttpHandler.Handle,
-					manifests.HandleTags,
-					manifests.HandleCatalog,
-					registry.Debug(debug), registry.Logger(l)),
+				Handler:           http.HandlerFunc(containerRegistry.Handle),
 			}
 
-			errCh := make(chan error)
-			go func() {
+			wg, ctx := errgroup.WithContext(ctx)
+			//
+			wg.Go(func() error {
+				return containerRegistry.Run(ctx)
+			})
+			//
+			wg.Go(func() error {
 				if useTLS {
-					l.Printf("listening HTTP over TLS serving on port %d", portI)
-					errCh <- s.ServeTLS(listener, certFile, keyfileFile)
+					l.Printf("listening HTTP over TLS serving on port %d", portInt)
+					return s.ServeTLS(listener, certFile, keyfileFile)
 				} else {
-					l.Printf("listening HTTP on port %d", portI)
-					errCh <- s.Serve(listener)
+					l.Printf("listening HTTP on port %d", portInt)
+					return s.Serve(listener)
 				}
-			}()
+			})
+			//
+			wg.Go(func() error {
+				<-ctx.Done()
+				l.Println("shutting down...")
+				if err := s.Shutdown(ctx); err != nil {
+					return err
+				}
+				return nil
+			})
 
-			<-ctx.Done()
-			l.Println("shutting down...")
-			if err := s.Shutdown(ctx); err != nil {
-				return err
-			}
-			if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
+			if err := wg.Wait(); !errors.Is(err, http.ErrServerClosed) {
 				return err
 			}
 			return nil
