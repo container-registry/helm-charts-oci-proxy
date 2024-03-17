@@ -114,16 +114,18 @@ func (r *Registry) homeHandler(w http.ResponseWriter, req *http.Request) error {
 }
 
 func (r *Registry) Handle(resp http.ResponseWriter, req *http.Request) {
+	if r.debug {
+		r.log.Printf("%s - %s", req.Method, req.URL)
+	}
 	if err := r.v2(resp, req); err != nil {
 		var regErr *rerrros.RegError
 		if errors.As(err, &regErr) {
 			r.log.Printf("%s %s %d %s %s", req.Method, req.URL, regErr.Status, regErr.Code, regErr.Message)
 			_ = regErr.Write(resp)
+			return
 		}
+		http.Error(resp, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	if r.debug {
-		r.log.Printf("%s - %s", req.Method, req.URL)
 	}
 }
 
@@ -197,15 +199,6 @@ func IndexErrorCacheTTL(v int) Option {
 func Cache(c manifest.Cache) Option {
 	return func(r *Registry) {
 		r.cache = c
-	}
-}
-
-func PathPrefix(v string) Option {
-	return func(r *Registry) {
-		if v == "/" {
-			return
-		}
-		r.pathPrefix = v
 	}
 }
 
