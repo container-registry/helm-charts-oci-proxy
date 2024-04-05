@@ -18,12 +18,7 @@ maintainers:
 annotations:
   artifacthub.io/changes: |
     - kind: changed
-      description: Run the container per default as non-root. Build-env and Base to chainguard images. Remove the self-sign certificate from container image
+      description: "Replace deprecated Horizontal Pod Autoscaler version v2beta1 with v2. Requires Kubernetes v1.23+."
       links:
-          - name: GitHub PR
-            url: https://github.com/container-registry/helm-charts-oci-proxy/pull/2
-    - kind: changed
-      description: Replace deprecated Horizontal Pod Autoscaler version v2beta1 with v2. Requires Kubernetes v1.23+.
-      links:
-          - name: GitHub PR
-            url: https://github.com/container-registry/helm-charts-oci-proxy/pull/12
+        - name: GitHub PR
+          url: https://github.com/container-registry/helm-charts-oci-proxy/pull/12
