@@ -1,10 +1,5 @@
-name: "Build container images"
+name: "Build Release"
 on:
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - 'docs/**'
   push:
     tags:
       - 'v*.*.*'
