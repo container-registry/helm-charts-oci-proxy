@@ -3,7 +3,7 @@ package blobs
 import (
 	cerrors "errors"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	"net/http"
 )
 

@@ -3,7 +3,7 @@ package mem
 import (
 	"bytes"
 	"context"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/blobs"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"io"
 	"sync"

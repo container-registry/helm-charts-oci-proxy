@@ -3,8 +3,8 @@ package registry
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/errors"
-	"github.com/container-registry/helm-charts-oci-proxy/registry/helper"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/sirupsen/logrus"
 	"io"
 	"log"
