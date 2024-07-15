@@ -15,6 +15,8 @@ on:
 jobs:
   publish-chart:
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -33,6 +35,11 @@ jobs:
       - name: Login to Registry
         run: echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ vars.REGISTRY_ADDR }} --username ${{ vars.REGISTRY_USERNAME }} --password-stdin
 
+      - name: Login to Registry, ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username ${{ github.repository_owner }} --password-stdin
+
       - name: Push Packaged Chart to Registry
         run: helm push ./tmp/* oci://${{ vars.REGISTRY_ADDR }}/library
 
+      - name: Push Packaged Chart to Registry, ghcr.io
+        run: helm push ./tmp/* oci://ghcr.io/${{ github.repository_owner }}/chart
