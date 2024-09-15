@@ -113,6 +113,9 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 
 	elem = elem[1:]
 	target := elem[len(elem)-1]
+	if target != "" && strings.HasPrefix(target, "v") {
+		target = target[1:]
+	}
 
 	var repoParts []string
 	for i := len(elem) - 3; i > 0; i-- {
