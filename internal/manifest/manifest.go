@@ -116,6 +116,9 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	if target != "" && strings.HasPrefix(target, "v") {
 		target = target[1:]
 	}
+	if target != "" && strings.Contains(target, "_") {
+		target = strings.ReplaceAll(target, "_", "+")
+	}
 
 	var repoParts []string
 	for i := len(elem) - 3; i > 0; i-- {
