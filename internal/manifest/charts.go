@@ -44,13 +44,16 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		reference = fmt.Sprintf("v%s", reference)
 	}
 
-	if strings.Contains(reference, "_") {
-		reference = strings.ReplaceAll(reference, "_", "+")
-	}
-
 	m.log.Printf("searching index for %s with reference %s\n", chart, reference)
 	chartVer, err := index.Get(chart, reference)
 	if err != nil {
+		if strings.Contains(reference, "_") {
+			reference = strings.ReplaceAll(reference, "_", "+")
+		}
+		chartVer, err = index.Get(chart, reference)
+	}
+	if err != nil {
+
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
 			Code:    "NOT FOUND",

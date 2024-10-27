@@ -116,9 +116,6 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	if target != "" && strings.HasPrefix(target, "v") {
 		target = target[1:]
 	}
-	if target != "" && strings.Contains(target, "_") {
-		target = strings.ReplaceAll(target, "_", "+")
-	}
 
 	var repoParts []string
 	for i := len(elem) - 3; i > 0; i-- {
@@ -201,11 +198,18 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 			}
 			ma, ok = m.manifests[repo][target]
 			if !ok {
+				// check if chart was just remapped to an _ before failing
+				if target != "" && strings.Contains(target, "_") {
+					target = strings.ReplaceAll(target, "_", "+")
+				}
+				ma, ok = m.manifests[repo][target]
 				// we failed
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "NOT FOUND",
-					Message: "Chart prepare error",
+				if !ok {
+					return &errors.RegError{
+						Status:  http.StatusNotFound,
+						Code:    "NOT FOUND",
+						Message: "Chart prepare error",
+					}
 				}
 			}
 		}
