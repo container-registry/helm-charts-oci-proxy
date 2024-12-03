@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
@@ -47,9 +48,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	m.log.Printf("searching index for %s with reference %s\n", chart, reference)
 	chartVer, err := index.Get(chart, reference)
 	if err != nil {
-		if strings.Contains(reference, "_") {
-			reference = strings.ReplaceAll(reference, "_", "+")
-		}
+		reference = helper.SemVerReplace(reference)
 		chartVer, err = index.Get(chart, reference)
 	}
 	if err != nil {
