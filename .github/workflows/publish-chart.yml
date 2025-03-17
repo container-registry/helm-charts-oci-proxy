@@ -27,6 +27,9 @@ jobs:
         with:
           version: v3.14.0
 
+      - name: Copy README.md to Chart Directory
+        run: cp README.md chart/README.md
+
       - name: Create Chart Package
         run: helm package chart -d ./tmp
 

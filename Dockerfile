@@ -1,8 +1,6 @@
 FROM cgr.dev/chainguard/go:latest as build-env
-
 ENV CGO_ENABLED=0
 WORKDIR /app
-
 COPY go.mod .
 COPY go.sum .
 RUN go mod download
