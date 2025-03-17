@@ -1,9 +1,9 @@
-
-
+[![Artifact HUB](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/helm-charts-oci-proxy)](https://artifacthub.io/packages/helm/helm-charts-oci-proxy/helm-charts-oci-proxy)
 
 # Helm Chart OCI Proxy
 
 Transparently proxy and transform [Chart Repository styled](https://helm.sh/docs/topics/chart_repository/) Helm Charts as OCI artifacts. Now you can address any public Chart Repository styled Helm Chart as an OCI styled artifact.
+
 
 <p align="center"><img src="docs/diagram.png" alt="Diagram showing the workflow of the Helm Chart OCI Proxy" width=66%></p>
 
