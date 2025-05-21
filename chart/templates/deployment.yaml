@@ -23,7 +23,9 @@ spec:
       {{- end }}
       labels:
         {{- include "ocip.selectorLabels" . | nindent 8 }}
-        {{- include "ocip.podLabels" . | nindent 8 }}
+        {{- with .Values.operator.podLabels }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
