@@ -98,5 +98,3 @@ app:
     DEBUG: false
     USE_TLS: false
     CACHE_TTL: 3600
-
-customLabels: {}
