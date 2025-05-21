@@ -23,6 +23,7 @@ spec:
       {{- end }}
       labels:
         {{- include "ocip.selectorLabels" . | nindent 8 }}
+        {{- include "ocip.podLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
