@@ -71,3 +71,10 @@ func IsV2(req *http.Request) bool {
 	}
 	return elems[len(elems)-1] == "v2"
 }
+
+func SemVerReplace(semver string) string {
+	if semver != "" && strings.Contains(semver, "_") {
+		semver = strings.ReplaceAll(semver, "_", "+")
+	}
+	return semver
+}

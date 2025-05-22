@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sirupsen/logrus"
 	"io"
@@ -198,11 +199,16 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 			}
 			ma, ok = m.manifests[repo][target]
 			if !ok {
+				// check if chart was just remapped to an _ before failing
+				target = helper.SemVerReplace(target)
+				ma, ok = m.manifests[repo][target]
 				// we failed
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "NOT FOUND",
-					Message: "Chart prepare error",
+				if !ok {
+					return &errors.RegError{
+						Status:  http.StatusNotFound,
+						Code:    "NOT FOUND",
+						Message: "Chart prepare error",
+					}
 				}
 			}
 		}
