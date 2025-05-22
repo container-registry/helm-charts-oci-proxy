@@ -15,11 +15,20 @@ build_push_image() {
 }
 
 build_push_chart() {
-  version=$(cat VERSION)
+  # Ensure prerequisites are available
+  if ! command -v yq >/dev/null 2>&1; then
+    echo "Error: 'yq' is required but not installed." >&2
+    exit 1
+  fi
+  if [ ! -f chart/Chart.yaml ]; then
+    echo "Error: chart/Chart.yaml not found." >&2
+    exit 1
+  fi
+  version=$(yq -r '.version' chart/Chart.yaml)
   helm package chart
-  helm push helm-charts-oci-proxy-$version.tgz oci://8gears.container-registry.com/library
+  helm push "helm-charts-oci-proxy-${version}.tgz" \
+    "oci://8gears.container-registry.com/library"
 }
-
 
 deploy() {
    helm upgrade -i --namespace ocip-staging --create-namespace ocip-staging ./chart
