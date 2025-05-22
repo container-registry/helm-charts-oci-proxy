@@ -15,11 +15,10 @@ build_push_image() {
 }
 
 build_push_chart() {
-  version=$(cat VERSION)
+  version=$(yq -r '.version' chart/Chart.yaml)
   helm package chart
   helm push helm-charts-oci-proxy-$version.tgz oci://8gears.container-registry.com/library
 }
-
 
 deploy() {
    helm upgrade -i --namespace ocip-staging --create-namespace ocip-staging ./chart
