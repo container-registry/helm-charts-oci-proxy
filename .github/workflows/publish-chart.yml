@@ -1,19 +1,57 @@
 name: "Publish Chart"
 
 on:
+  workflow_dispatch: # Allows manual triggering
   pull_request:
     paths:
-      - .github/workflows/publish_chart.yml
-      - chart/**
+      - chart/Chart.yaml
+      - .github/workflows/publish-chart.yml
   push:
     paths:
-      - .github/workflows/publish_chart.yml
-      - chart/**
+      - chart/Chart.yaml
+      - .github/workflows/publish-chart.yml
     branches:
       - main
 
 jobs:
+  check-version-change:
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.check-version.outputs.changed }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Check if Chart Version Changed
+        id: check-version
+        if: github.event_name != 'workflow_dispatch' # Skip if manually triggered
+        run: |
+          if git diff --name-only HEAD^ HEAD | grep -q 'chart/Chart.yaml'; then
+            PREVIOUS_VERSION=$(git show HEAD^:chart/Chart.yaml | grep 'version:' | awk '{print $2}')
+            CURRENT_VERSION=$(grep 'version:' chart/Chart.yaml | awk '{print $2}')
+            
+            if [ "$PREVIOUS_VERSION" != "$CURRENT_VERSION" ]; then
+              echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
+              echo "changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "Version didn't change ($CURRENT_VERSION)"
+              echo "changed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "Chart.yaml wasn't modified"
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set Publish Flag for Manual Runs
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "changed=true" >> $GITHUB_OUTPUT
+
   publish-chart:
+    needs: check-version-change
+    if: needs.check-version-change.outputs.should_publish == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -38,4 +76,3 @@ jobs:
 
       - name: Push Packaged Chart to Registry
         run: helm push ./tmp/* oci://${{ vars.REGISTRY_ADDR }}/library
-
