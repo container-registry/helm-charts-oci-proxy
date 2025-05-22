@@ -43,6 +43,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.customLabels }}
 {{ toYaml .Values.customLabels }}
 {{- end }}
+{{- end }}
 
 {{/*
 Selector labels

@@ -1,5 +1,4 @@
 replicaCount: 1
-# Will be added to all resources
 customLabels: {}
 
 deploymentStrategy:
@@ -24,15 +23,16 @@ serviceAccount:
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: ""
-  
 
 podAnnotations: {}
 podLabels: {}
 
-podSecurityContext: {}
+podSecurityContext:
+  {}
   # fsGroup: 2000
 
-securityContext: {}
+securityContext:
+  {}
   # capabilities:
   #   drop:
   #   - ALL
@@ -62,12 +62,12 @@ ingress:
         - chartproxy.container-registry.com
 
 resources:
-#   limits:
-#     cpu: 200m
-#     memory: 256Mi
-   requests:
-     cpu: 100m
-     memory: 128Mi
+  #   limits:
+  #     cpu: 200m
+  #     memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
 
 # persistence
 persistence:
@@ -77,7 +77,6 @@ persistence:
   accessMode: ReadWriteOnce
   annotations: {}
 # custom app values
-
 
 autoscaling:
   enabled: false
@@ -91,7 +90,6 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
-
 
 app:
   env_vars:
