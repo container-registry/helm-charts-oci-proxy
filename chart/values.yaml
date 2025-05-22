@@ -1,4 +1,5 @@
 replicaCount: 1
+customLabels: {}
 
 deploymentStrategy:
   type: RollingUpdate
@@ -24,6 +25,7 @@ serviceAccount:
   name: ""
 
 podAnnotations: {}
+podLabels: {}
 
 podSecurityContext:
   {}
