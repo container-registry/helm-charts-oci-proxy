@@ -160,11 +160,19 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 
 			ma, ok = c[target]
 			if !ok {
-				// we failed
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "NOT FOUND",
-					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
+				originalTarget := target // Store original target
+				if m.config.Debug {
+					m.log.Printf("GET: Chart lookup failed for repo %s with target %s after prepareChart. Attempting again after converting underscores to plus signs.", repo, originalTarget)
+				}
+				target = helper.SemVerReplace(originalTarget) // Use originalTarget for conversion
+				ma, ok = c[target]                            // Attempt lookup with the new target
+				if !ok {
+					// we failed again
+					return &errors.RegError{
+						Status:  http.StatusNotFound,
+						Code:    "NOT FOUND",
+						Message: fmt.Sprintf("GET: Chart prepare's result not found for repo %s. Tried target '%s' and after underscore conversion '%s'.", repo, originalTarget, target),
+					}
 				}
 			}
 		}
@@ -192,17 +200,28 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 		}
 		ma, ok := m.manifests[repo][target]
 		if !ok {
+			// First lookup failed, try preparing chart (which might involve its own SemVerReplace)
 			err := m.prepareChart(req.Context(), repo, target)
 			if err != nil {
-				return err
+				return err // Error from prepareChart
 			}
+			// After prepareChart, try lookup again with the potentially modified target from prepareChart
+			// and then with SemVerReplace if that also fails.
 			ma, ok = m.manifests[repo][target]
 			if !ok {
-				// we failed
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "NOT FOUND",
-					Message: "Chart prepare error",
+				originalTarget := target // Store target before SemVerReplace
+				if m.config.Debug {
+					m.log.Printf("HEAD: Manifest not found for repo %s with target %s even after prepareChart. Attempting again after converting underscores to plus signs.", repo, originalTarget)
+				}
+				target = helper.SemVerReplace(originalTarget) // Convert underscores
+				ma, ok = m.manifests[repo][target]           // Final attempt
+				if !ok {
+					// All attempts failed
+					return &errors.RegError{
+						Status:  http.StatusNotFound,
+						Code:    "NOT FOUND",
+						Message: fmt.Sprintf("HEAD: Chart manifest not found for repo %s. Tried target '%s' and after underscore conversion '%s'.", repo, originalTarget, target),
+					}
 				}
 			}
 		}

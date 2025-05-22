@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
@@ -47,10 +48,19 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	m.log.Printf("searching index for %s with reference %s\n", chart, reference)
 	chartVer, err := index.Get(chart, reference)
 	if err != nil {
+		originalReference := reference // Store Original Reference
+		if m.config.Debug {
+			m.log.Printf("Chart lookup for '%s' with reference '%s' failed. Attempting again after converting underscores to plus signs in reference.", chart, originalReference)
+		}
+		reference = helper.SemVerReplace(originalReference) // Use originalReference for conversion
+		chartVer, err = index.Get(chart, reference)
+	}
+	if err != nil {
+
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
 			Code:    "NOT FOUND",
-			Message: fmt.Sprintf("Chart: %s version: %s not found: %v", chart, reference, err),
+			Message: fmt.Sprintf("Chart: %s version: %s not found. Attempted lookup with original reference and after converting underscores to plus signs. Last error: %v", chart, originalReference, err),
 		}
 	}
 
