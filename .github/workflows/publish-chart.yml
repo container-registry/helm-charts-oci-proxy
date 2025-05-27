@@ -22,6 +22,14 @@ jobs:
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
+
+      - name: Install yq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Check if Chart Version Changed
         id: check-version
         if: github.event_name != 'workflow_dispatch' # Skip if manually triggered
@@ -29,8 +37,8 @@ jobs:
           if git diff --name-only HEAD^ HEAD | grep -q 'chart/Chart.yaml'; then
             # Check if Chart.yaml existed in previous commit
             if git cat-file -e HEAD^:chart/Chart.yaml 2>/dev/null; then
-              PREVIOUS_VERSION=$(git show HEAD^:chart/Chart.yaml | yq -r '.version')
-              CURRENT_VERSION=$(yq -r '.version' chart/Chart.yaml)
+              PREVIOUS_VERSION=$(git show HEAD^:chart/Chart.yaml | yq '.version')
+              CURRENT_VERSION=$(yq '.version' chart/Chart.yaml)
               if [ "$PREVIOUS_VERSION" != "$CURRENT_VERSION" ]; then
                 echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
                 echo "changed=true" >> $GITHUB_OUTPUT
@@ -46,10 +54,12 @@ jobs:
             echo "Chart.yaml wasn't modified"
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
+
       - name: Set Publish Flag for Manual Runs
         if: github.event_name == 'workflow_dispatch'
         id: manual-flag
         run: echo "changed=true" >> $GITHUB_OUTPUT
+
   publish-chart:
     needs: check-version-change
     if: needs.check-version-change.outputs.should_publish == 'true'
@@ -60,15 +70,20 @@ jobs:
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
+
       - name: Install Helm
         uses: azure/setup-helm@v3
         with:
           version: v3.14.0
+
       - name: Copy README.md to Chart Directory
         run: cp README.md chart/README.md
+
       - name: Create Chart Package
         run: helm package chart -d ./tmp
+
       - name: Login to Registry
         run: echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ vars.REGISTRY_ADDR }} --username ${{ vars.REGISTRY_USERNAME }} --password-stdin
+
       - name: Push Packaged Chart to Registry
         run: helm push ./tmp/* oci://${{ vars.REGISTRY_ADDR }}/library
