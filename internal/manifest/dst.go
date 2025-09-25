@@ -6,10 +6,24 @@ import (
 	"github.com/container-registry/helm-charts-oci-proxy/pkg/verify"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"helm.sh/helm/v3/pkg/repo"
 	"io"
 	"strings"
 	"time"
 )
+
+// getDeterministicTimestamp returns a deterministic timestamp based on chart metadata.
+// This ensures that the same chart version always produces the same timestamp,
+// making OCI artifacts reproducible.
+func (f *InternalDst) getDeterministicTimestamp() time.Time {
+	// If we have chart version information, use the shared function
+	if f.chartVer != nil {
+		return getDeterministicCreatedTimestamp(f.chartVer)
+	}
+
+	// Fallback to current time if no chart version available (backward compatibility)
+	return time.Now()
+}
 
 const (
 	ProxyRefAnnotationPrefix = "com.container-registry.proxy-ref-"
@@ -32,10 +46,15 @@ type InternalDst struct {
 	repo           string
 	blobPutHandler handler.BlobPutHandler
 	manifests      *Manifests
+	chartVer       *repo.ChartVersion // Added to store chart version for deterministic timestamps
 }
 
 func NewInternalDst(repo string, blobPutHandler handler.BlobPutHandler, manifests *Manifests) *InternalDst {
-	return &InternalDst{repo: repo, blobPutHandler: blobPutHandler, manifests: manifests}
+	return &InternalDst{repo: repo, blobPutHandler: blobPutHandler, manifests: manifests, chartVer: nil}
+}
+
+func NewInternalDstWithChartVer(repo string, blobPutHandler handler.BlobPutHandler, manifests *Manifests, chartVer *repo.ChartVersion) *InternalDst {
+	return &InternalDst{repo: repo, blobPutHandler: blobPutHandler, manifests: manifests, chartVer: chartVer}
 }
 
 func (f *InternalDst) Tag(ctx context.Context, desc ocispec.Descriptor, reference string) error {
@@ -99,7 +118,7 @@ func (f *InternalDst) Push(ctx context.Context, expected ocispec.Descriptor, con
 			ContentType: expected.MediaType,
 			Blob:        binary,
 			Refs:        refs,
-			CreatedAt:   time.Now(),
+			CreatedAt:   f.getDeterministicTimestamp(),
 		})
 	}
 	//blob
