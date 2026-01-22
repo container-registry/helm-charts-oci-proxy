@@ -3,6 +3,7 @@ package manifest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
@@ -20,7 +21,30 @@ import (
 	"path/filepath"
 	"sigs.k8s.io/yaml"
 	"strings"
+	"time"
 )
+
+// getDeterministicCreatedTimestamp returns a deterministic timestamp for a chart version.
+// This ensures that the same chart version always produces the same OCI manifest,
+// making artifacts reproducible and fixing FluxCD reconciliation issues.
+func getDeterministicCreatedTimestamp(chartVer *repo.ChartVersion) time.Time {
+	// If the chart version has a Created timestamp from the index.yaml, use it
+	if !chartVer.Created.IsZero() {
+		return chartVer.Created
+	}
+
+	// Fallback: derive a deterministic timestamp from chart name and version
+	// Use a fixed base timestamp and add deterministic offset based on chart metadata
+	baseTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Create a hash from chart name and version for deterministic offset
+	hash := sha256.Sum256([]byte(chartVer.Name + "@" + chartVer.Version))
+
+	// Use first 4 bytes of hash to create offset in seconds (max ~136 years)
+	offset := int64(hash[0])<<24 | int64(hash[1])<<16 | int64(hash[2])<<8 | int64(hash[3])
+
+	return baseTime.Add(time.Duration(offset) * time.Second)
+}
 
 func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string, rewriteOpts RewriteOptions) *errors.RegError {
 	elem := strings.Split(repo, "/")
@@ -100,7 +124,13 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		}
 	}
 
-	packOpts := oras.PackOptions{}
+	// Set deterministic timestamp for OCI manifest to ensure reproducible artifacts
+	deterministicTime := getDeterministicCreatedTimestamp(chartVer)
+	packOpts := oras.PackOptions{
+		ManifestAnnotations: map[string]string{
+			ocispec.AnnotationCreated: deterministicTime.Format(time.RFC3339),
+		},
+	}
 	memStore := memory.New()
 
 	configData := []byte("{}")

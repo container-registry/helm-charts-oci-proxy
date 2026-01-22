@@ -6,6 +6,7 @@
 *.dylib
 .idea
 .bin
+helm-charts-oci-proxy
 # Test binary, built with `go test -c`
 *.test
 
