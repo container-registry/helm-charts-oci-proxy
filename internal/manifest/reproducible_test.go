@@ -102,3 +102,93 @@ func (m *mockLogger) Fatalln(v ...interface{})               { os.Exit(1) }
 func (m *mockLogger) Panic(v ...interface{})                 { panic(v) }
 func (m *mockLogger) Panicf(format string, v ...interface{}) { panic(v) }
 func (m *mockLogger) Panicln(v ...interface{})               { panic(v) }
+
+// TestGetDeterministicCreatedTimestamp tests the function used for OCI manifest annotations
+func TestGetDeterministicCreatedTimestamp(t *testing.T) {
+	tests := []struct {
+		name     string
+		chartVer *repo.ChartVersion
+		expected time.Time
+	}{
+		{
+			name: "uses Created timestamp from index.yaml",
+			chartVer: &repo.ChartVersion{
+				Metadata: &chart.Metadata{
+					Name:    "cert-manager",
+					Version: "1.13.3",
+				},
+				Created: time.Date(2023, 12, 11, 14, 37, 55, 0, time.UTC),
+			},
+			expected: time.Date(2023, 12, 11, 14, 37, 55, 0, time.UTC),
+		},
+		{
+			name: "fallback uses deterministic hash when Created is zero",
+			chartVer: &repo.ChartVersion{
+				Metadata: &chart.Metadata{
+					Name:    "test-chart",
+					Version: "1.0.0",
+				},
+				// Created is zero value
+			},
+			// Expected is deterministic based on hash of "test-chart@1.0.0"
+			// We just verify it's deterministic, not the exact value
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result1 := getDeterministicCreatedTimestamp(tt.chartVer)
+			result2 := getDeterministicCreatedTimestamp(tt.chartVer)
+
+			// Verify determinism - same input produces same output
+			if !result1.Equal(result2) {
+				t.Errorf("Timestamps not deterministic: got %v and %v", result1, result2)
+			}
+
+			// If we have an expected value, verify it
+			if !tt.expected.IsZero() && !result1.Equal(tt.expected) {
+				t.Errorf("Expected %v, got %v", tt.expected, result1)
+			}
+
+			// Verify it's not the current time (for fallback case)
+			if tt.chartVer.Created.IsZero() {
+				now := time.Now()
+				if result1.After(now.Add(-time.Minute)) && result1.Before(now.Add(time.Minute)) {
+					t.Error("Fallback timestamp appears to be current time, not deterministic")
+				}
+			}
+
+			t.Logf("Chart %s@%s -> timestamp: %v", tt.chartVer.Name, tt.chartVer.Version, result1)
+		})
+	}
+}
+
+// TestOCIManifestAnnotationDeterminism verifies the OCI manifest annotation timestamp is deterministic
+func TestOCIManifestAnnotationDeterminism(t *testing.T) {
+	// Simulates what happens in charts.go prepareChart()
+	chartVer := &repo.ChartVersion{
+		Metadata: &chart.Metadata{
+			Name:    "ingress-nginx",
+			Version: "4.11.3",
+		},
+		Created: time.Date(2024, 10, 8, 21, 9, 15, 0, time.UTC),
+	}
+
+	// This is what gets set in packOpts.ManifestAnnotations
+	ts1 := getDeterministicCreatedTimestamp(chartVer)
+	annotation1 := ts1.Format(time.RFC3339)
+
+	ts2 := getDeterministicCreatedTimestamp(chartVer)
+	annotation2 := ts2.Format(time.RFC3339)
+
+	if annotation1 != annotation2 {
+		t.Errorf("OCI manifest annotations not deterministic: %s vs %s", annotation1, annotation2)
+	}
+
+	expected := "2024-10-08T21:09:15Z"
+	if annotation1 != expected {
+		t.Errorf("Expected annotation %s, got %s", expected, annotation1)
+	}
+
+	t.Logf("OCI manifest annotation 'org.opencontainers.image.created': %s", annotation1)
+}
