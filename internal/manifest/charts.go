@@ -189,7 +189,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return nil
 	}
 
-	dst := NewInternalDstWithChartVer(fmt.Sprintf("%s/%s", path, chartVer.Name), m.blobHandler.(handler.BlobPutHandler), m, chartVer)
+	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), m.blobHandler.(handler.BlobPutHandler), m)
 	// push
 	if reference == "" {
 		err = oras.CopyGraph(ctx, memStore, dst, root, copyOptions.CopyGraphOptions)

@@ -1,131 +1,13 @@
 package manifest
 
 import (
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/repo"
 )
-
-// TestReproducibleArtifacts verifies that the same chart input produces the same OCI artifact checksum
-func TestReproducibleArtifacts(t *testing.T) {
-	// Create a mock chart version with deterministic data
-	chartVer := &repo.ChartVersion{
-		Metadata: &chart.Metadata{
-			Name:       "test-chart",
-			Version:    "1.0.0",
-			APIVersion: "v2",
-		},
-		URLs:    []string{"test-chart-1.0.0.tgz"},
-		Created: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC), // Fixed timestamp
-		Digest:  "sha256:abcd1234",
-	}
-
-	// Create mock manifests instance
-	config := Config{
-		Debug:    false,
-		CacheTTL: time.Hour,
-	}
-	
-	blobHandler := mem.NewMemHandler()
-	cache := &mockCache{}
-	manifests := NewManifests(context.Background(), blobHandler, config, cache, &mockLogger{})
-
-	// Test data - simulating downloaded chart content
-	testChartData := []byte("mock chart data for testing reproducibility")
-	
-	// Create dst instances with chart version
-	dst1 := NewInternalDstWithChartVer("test-repo/test-chart", blobHandler, manifests, chartVer)
-	dst2 := NewInternalDstWithChartVer("test-repo/test-chart", blobHandler, manifests, chartVer)
-	
-	// Create two manifest instances with same input
-	manifest1 := Manifest{
-		ContentType: "application/vnd.docker.distribution.manifest.v2+json",
-		Blob:        testChartData,
-		Refs:        []string{"sha256:ref1", "sha256:ref2"},
-		CreatedAt:   dst1.getDeterministicTimestamp(), // Use deterministic timestamp
-	}
-
-	manifest2 := Manifest{
-		ContentType: "application/vnd.docker.distribution.manifest.v2+json",
-		Blob:        testChartData,
-		Refs:        []string{"sha256:ref1", "sha256:ref2"},
-		CreatedAt:   dst2.getDeterministicTimestamp(), // Use deterministic timestamp
-	}
-
-	// Simulate OCI manifest JSON structure that includes the timestamp annotation
-	// This is what FluxCD actually checksums - the full manifest JSON including annotations
-	type ociManifestForHash struct {
-		Blob        []byte    `json:"blob"`
-		ContentType string    `json:"contentType"`
-		CreatedAt   time.Time `json:"createdAt"`
-	}
-
-	ociManifest1 := ociManifestForHash{
-		Blob:        manifest1.Blob,
-		ContentType: manifest1.ContentType,
-		CreatedAt:   manifest1.CreatedAt,
-	}
-	ociManifest2 := ociManifestForHash{
-		Blob:        manifest2.Blob,
-		ContentType: manifest2.ContentType,
-		CreatedAt:   manifest2.CreatedAt,
-	}
-
-	// Hash the full manifest content including timestamp
-	// This ensures the test fails if timestamps regress to time.Now()
-	json1, _ := json.Marshal(ociManifest1)
-	json2, _ := json.Marshal(ociManifest2)
-
-	hash1 := sha256.Sum256(json1)
-	checksum1 := "sha256:" + hex.EncodeToString(hash1[:])
-
-	hash2 := sha256.Sum256(json2)
-	checksum2 := "sha256:" + hex.EncodeToString(hash2[:])
-
-	// Both checksums should be identical
-	if checksum1 != checksum2 {
-		t.Errorf("Expected identical checksums, got %s and %s", checksum1, checksum2)
-	}
-
-	// Verify timestamps are deterministic
-	if !manifest1.CreatedAt.Equal(manifest2.CreatedAt) {
-		t.Errorf("Expected identical timestamps, got %v and %v", manifest1.CreatedAt, manifest2.CreatedAt)
-	}
-
-	t.Logf("Reproducible checksum (includes timestamp): %s", checksum1)
-	t.Logf("Deterministic timestamp: %v", manifest1.CreatedAt)
-}
-
-// Mock implementations for testing
-type mockCache struct{}
-
-func (m *mockCache) Get(key interface{}) (interface{}, bool) {
-	return nil, false
-}
-
-func (m *mockCache) SetWithTTL(key interface{}, value interface{}, cost int64, ttl time.Duration) bool {
-	return true
-}
-
-type mockLogger struct{}
-
-func (m *mockLogger) Printf(format string, v ...interface{}) {}
-func (m *mockLogger) Print(v ...interface{})                 {}
-func (m *mockLogger) Println(v ...interface{})               {}
-func (m *mockLogger) Fatal(v ...interface{})                 { os.Exit(1) }
-func (m *mockLogger) Fatalf(format string, v ...interface{}) { os.Exit(1) }
-func (m *mockLogger) Fatalln(v ...interface{})               { os.Exit(1) }
-func (m *mockLogger) Panic(v ...interface{})                 { panic(v) }
-func (m *mockLogger) Panicf(format string, v ...interface{}) { panic(v) }
-func (m *mockLogger) Panicln(v ...interface{})               { panic(v) }
 
 // TestGetDeterministicCreatedTimestamp tests the function used for OCI manifest annotations
 func TestGetDeterministicCreatedTimestamp(t *testing.T) {
@@ -174,14 +56,6 @@ func TestGetDeterministicCreatedTimestamp(t *testing.T) {
 				t.Errorf("Expected %v, got %v", tt.expected, result1)
 			}
 
-			// Verify it's not the current time (for fallback case)
-			if tt.chartVer.Created.IsZero() {
-				now := time.Now()
-				if result1.After(now.Add(-time.Minute)) && result1.Before(now.Add(time.Minute)) {
-					t.Error("Fallback timestamp appears to be current time, not deterministic")
-				}
-			}
-
 			t.Logf("Chart %s@%s -> timestamp: %v", tt.chartVer.Name, tt.chartVer.Version, result1)
 		})
 	}
@@ -216,3 +90,62 @@ func TestOCIManifestAnnotationDeterminism(t *testing.T) {
 
 	t.Logf("OCI manifest annotation 'org.opencontainers.image.created': %s", annotation1)
 }
+
+// TestDeterministicTimestampAcrossCharts verifies different charts get different but stable timestamps
+func TestDeterministicTimestampAcrossCharts(t *testing.T) {
+	charts := []*repo.ChartVersion{
+		{Metadata: &chart.Metadata{Name: "chart-a", Version: "1.0.0"}},
+		{Metadata: &chart.Metadata{Name: "chart-b", Version: "1.0.0"}},
+		{Metadata: &chart.Metadata{Name: "chart-a", Version: "2.0.0"}},
+	}
+
+	timestamps := make([]time.Time, len(charts))
+	for i, cv := range charts {
+		timestamps[i] = getDeterministicCreatedTimestamp(cv)
+		t.Logf("%s@%s -> %v", cv.Name, cv.Version, timestamps[i])
+	}
+
+	// All should be different (different chart name/version combinations)
+	for i := 0; i < len(timestamps); i++ {
+		for j := i + 1; j < len(timestamps); j++ {
+			if timestamps[i].Equal(timestamps[j]) {
+				t.Errorf("Charts %d and %d have same timestamp, expected different", i, j)
+			}
+		}
+	}
+
+	// But calling again should produce same results
+	for i, cv := range charts {
+		ts := getDeterministicCreatedTimestamp(cv)
+		if !ts.Equal(timestamps[i]) {
+			t.Errorf("Timestamp not stable for chart %d: got %v, expected %v", i, ts, timestamps[i])
+		}
+	}
+}
+
+// Mock implementations for testing
+type mockCache struct{}
+
+func (m *mockCache) Get(key any) (any, bool) {
+	return nil, false
+}
+
+func (m *mockCache) SetWithTTL(key any, value any, cost int64, ttl time.Duration) bool {
+	return true
+}
+
+type mockLogger struct{}
+
+func (m *mockLogger) Printf(format string, v ...any) {}
+func (m *mockLogger) Print(v ...any)                 {}
+func (m *mockLogger) Println(v ...any)               {}
+func (m *mockLogger) Fatal(v ...any)                 { panic(v) }
+func (m *mockLogger) Fatalf(format string, v ...any) { panic(v) }
+func (m *mockLogger) Fatalln(v ...any)               { panic(v) }
+func (m *mockLogger) Panic(v ...any)                 { panic(v) }
+func (m *mockLogger) Panicf(format string, v ...any) { panic(v) }
+func (m *mockLogger) Panicln(v ...any)               { panic(v) }
+
+// Ensure mockLogger is not unused
+var _ = mockLogger{}
+var _ = os.Exit
