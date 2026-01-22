@@ -132,6 +132,9 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	})
 	repo := strings.Join(repoParts, "/")
 
+	// Determine rewrite options from config and query params
+	rewriteOpts := m.getRewriteOptions(req)
+
 	switch req.Method {
 	case http.MethodGet:
 		m.lock.Lock()
@@ -141,7 +144,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 
 		c, ok := m.manifests[repo]
 		if !ok {
-			err := m.prepareChart(req.Context(), repo, target)
+			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
 			if err != nil {
 				return err
 			}
@@ -153,7 +156,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 		ma, ok := c[target]
 		if !ok {
 			if !prepared {
-				err := m.prepareChart(req.Context(), repo, target)
+				err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
 				if err != nil {
 					return err
 				}
@@ -186,14 +189,14 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 		defer m.lock.Unlock()
 		if _, ok := m.manifests[repo]; !ok {
 
-			err := m.prepareChart(req.Context(), repo, target)
+			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
 			if err != nil {
 				return err
 			}
 		}
 		ma, ok := m.manifests[repo][target]
 		if !ok {
-			err := m.prepareChart(req.Context(), repo, target)
+			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
 			if err != nil {
 				return err
 			}
@@ -262,9 +265,12 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
+	// Determine rewrite options from config and query params
+	rewriteOpts := m.getRewriteOptions(req)
+
 	c, ok := m.manifests[fullRepo]
 	if !ok {
-		err := m.prepareChart(req.Context(), fullRepo, "")
+		err := m.prepareChart(req.Context(), fullRepo, "", rewriteOpts)
 		if err != nil {
 			return err
 		}
@@ -422,4 +428,27 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) e
 		return errors.RegErrInternal(err)
 	}
 	return nil
+}
+
+// getRewriteOptions determines rewrite options from config and query parameters.
+// Query parameter "rewrite_dependencies" overrides the config setting.
+func (m *Manifests) getRewriteOptions(req *http.Request) RewriteOptions {
+	// Start with config value
+	enabled := m.config.RewriteDependencies
+
+	// Query param overrides config
+	if qp := req.URL.Query().Get("rewrite_dependencies"); qp != "" {
+		enabled = qp == "true" || qp == "1"
+	}
+
+	// Determine proxy host: config overrides request host
+	proxyHost := m.config.ProxyHost
+	if proxyHost == "" {
+		proxyHost = req.Host
+	}
+
+	return RewriteOptions{
+		Enabled:   enabled,
+		ProxyHost: proxyHost,
+	}
 }

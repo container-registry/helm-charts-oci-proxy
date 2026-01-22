@@ -119,6 +119,44 @@ There are not many options in configure the application except the following.
 * `INDEX_CACHE_TTL` - for how long we store chart index file content, the default value is `14400` seconds (4h)
 * `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. The default value is `30` seconds.
 * `USE_TLS` - enabled HTTP over TLS
+* `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Default is `false`.
+* `PROXY_HOST` - override the proxy host used in rewritten dependency URLs. If not set, uses the Host header from incoming requests.
+
+### Dependency URL Rewriting
+
+When a Helm chart has dependencies, those repository URLs are hardcoded in `Chart.yaml`. By default, even if you pull the parent chart through this proxy, Helm will fetch dependencies from their original public URLs.
+
+With `REWRITE_DEPENDENCIES=true`, the proxy rewrites dependency URLs so all charts are also fetched through the proxy:
+
+```yaml
+# Original Chart.yaml dependency
+dependencies:
+  - name: redis
+    repository: https://charts.bitnami.com/bitnami
+
+# After rewriting (when PROXY_HOST=chartproxy.container-registry.com)
+dependencies:
+  - name: redis
+    repository: oci://chartproxy.container-registry.com/charts.bitnami.com/bitnami
+```
+
+You can also enable/disable rewriting per-request using the `rewrite_dependencies` query parameter:
+
+```bash
+# Enable rewriting for this request
+helm pull "oci://chartproxy.example.com/charts.bitnami.com/bitnami/redis?rewrite_dependencies=true"
+
+# Disable rewriting for this request
+helm pull "oci://chartproxy.example.com/charts.jetstack.io/cert-manager?rewrite_dependencies=false"
+```
+
+The following URL types are NOT rewritten:
+- `file://` - local file dependencies
+- `@alias` or `alias:` - Helm repository aliases
+- Empty URLs
+
+> [!WARNING]
+> Enabling `REWRITE_DEPENDENCIES` modifies the `Chart.yaml` inside the chart tarball, which will break Helm chart signature verification. If you rely on provenance files (`.prov`) or `helm verify`, do not use this feature.
 
 
 ### TODO

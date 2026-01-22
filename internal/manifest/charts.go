@@ -22,7 +22,7 @@ import (
 	"strings"
 )
 
-func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string) *errors.RegError {
+func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string, rewriteOpts RewriteOptions) *errors.RegError {
 	elem := strings.Split(repo, "/")
 
 	if len(elem) < 2 {
@@ -84,6 +84,20 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
 		return errors.RegErrInternal(err)
+	}
+
+	// Rewrite chart dependencies if enabled
+	if rewriteOpts.Enabled && rewriteOpts.ProxyHost != "" {
+		rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, rewriteOpts.ProxyHost, m.log)
+		if rewriteErr != nil {
+			m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
+			// Continue with original data (fail open)
+		} else if result.Modified {
+			manifestData = rewrittenData
+			if m.config.Debug {
+				m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
+			}
+		}
 	}
 
 	packOpts := oras.PackOptions{}

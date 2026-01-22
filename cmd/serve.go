@@ -65,6 +65,9 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			indexCacheTTL, _ := env.GetInt("INDEX_CACHE_TTL", 3600*4)        // 4 hours
 			indexErrorCacheTTL, _ := env.GetInt("INDEX_ERROR_CACHE_TTL", 30) // 30 seconds
 
+			rewriteDeps, _ := env.GetBool("REWRITE_DEPENDENCIES", false)
+			proxyHost := env.GetString("PROXY_HOST", "")
+
 			useTLS, _ := env.GetBool("USE_TLS", false)
 			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
 			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
@@ -88,10 +91,12 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			blobsHandler := mem.NewMemHandler()
 
 			manifests := manifest.NewManifests(ctx, blobsHandler, manifest.Config{
-				Debug:              debug,
-				CacheTTL:           time.Duration(cacheTTL) * time.Second,
-				IndexCacheTTL:      time.Duration(indexCacheTTL) * time.Second,
-				IndexErrorCacheTTl: time.Duration(indexErrorCacheTTL) * time.Second,
+				Debug:               debug,
+				CacheTTL:            time.Duration(cacheTTL) * time.Second,
+				IndexCacheTTL:       time.Duration(indexCacheTTL) * time.Second,
+				IndexErrorCacheTTl:  time.Duration(indexErrorCacheTTL) * time.Second,
+				RewriteDependencies: rewriteDeps,
+				ProxyHost:           proxyHost,
 			}, indexCache, l)
 
 			blobsHttpHandler := blobs.NewBlobs(blobsHandler, l)
