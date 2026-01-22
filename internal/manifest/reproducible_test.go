@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -59,11 +60,34 @@ func TestReproducibleArtifacts(t *testing.T) {
 		CreatedAt:   dst2.getDeterministicTimestamp(), // Use deterministic timestamp
 	}
 
-	// Calculate checksums of the manifest blobs
-	hash1 := sha256.Sum256(manifest1.Blob)
+	// Simulate OCI manifest JSON structure that includes the timestamp annotation
+	// This is what FluxCD actually checksums - the full manifest JSON including annotations
+	type ociManifestForHash struct {
+		Blob        []byte    `json:"blob"`
+		ContentType string    `json:"contentType"`
+		CreatedAt   time.Time `json:"createdAt"`
+	}
+
+	ociManifest1 := ociManifestForHash{
+		Blob:        manifest1.Blob,
+		ContentType: manifest1.ContentType,
+		CreatedAt:   manifest1.CreatedAt,
+	}
+	ociManifest2 := ociManifestForHash{
+		Blob:        manifest2.Blob,
+		ContentType: manifest2.ContentType,
+		CreatedAt:   manifest2.CreatedAt,
+	}
+
+	// Hash the full manifest content including timestamp
+	// This ensures the test fails if timestamps regress to time.Now()
+	json1, _ := json.Marshal(ociManifest1)
+	json2, _ := json.Marshal(ociManifest2)
+
+	hash1 := sha256.Sum256(json1)
 	checksum1 := "sha256:" + hex.EncodeToString(hash1[:])
 
-	hash2 := sha256.Sum256(manifest2.Blob)
+	hash2 := sha256.Sum256(json2)
 	checksum2 := "sha256:" + hex.EncodeToString(hash2[:])
 
 	// Both checksums should be identical
@@ -76,7 +100,7 @@ func TestReproducibleArtifacts(t *testing.T) {
 		t.Errorf("Expected identical timestamps, got %v and %v", manifest1.CreatedAt, manifest2.CreatedAt)
 	}
 
-	t.Logf("Reproducible checksum: %s", checksum1)
+	t.Logf("Reproducible checksum (includes timestamp): %s", checksum1)
 	t.Logf("Deterministic timestamp: %v", manifest1.CreatedAt)
 }
 
