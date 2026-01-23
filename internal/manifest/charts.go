@@ -250,7 +250,9 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 			// cache error too to avoid external resource exhausting
 			ttl = m.config.IndexErrorCacheTTl
 		}
-		m.cache.SetWithTTL(repoURLPath, res, 1000, ttl)
+		// Use higher cost for parsed IndexFile structs to ensure proper cache admission
+		// See: https://github.com/container-registry/helm-charts-oci-proxy/issues/11
+		m.cache.SetWithTTL(repoURLPath, res, 100000, ttl)
 		return res.c, res.err
 	}
 
@@ -318,7 +320,12 @@ func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
 			// cache error too to avoid external resource exhausting
 			ttl = m.config.IndexErrorCacheTTl
 		}
-		m.cache.SetWithTTL(url, res, 1000, ttl)
+		// Use actual byte size as cost for proper cache admission
+		cost := int64(len(res.c))
+		if cost < 1 {
+			cost = 1 // minimum cost for error entries
+		}
+		m.cache.SetWithTTL(url, res, cost, ttl)
 		return res.c, res.err
 	}
 
