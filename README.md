@@ -4,6 +4,9 @@
 
 Transparently proxy and transform [Chart Repository styled](https://helm.sh/docs/topics/chart_repository/) Helm Charts as OCI artifacts. Now you can address any public Chart Repository styled Helm Chart as an OCI styled artifact.
 
+> [!NOTE]
+> Helm Chart OCI Proxy is now build into [8gears Container Registry (8gcr)](https://github.com/container-registry/harbor-next). Give it a try
+
 
 <p align="center"><img src="docs/diagram.png" alt="Diagram showing the workflow of the Helm Chart OCI Proxy" width=66%></p>
 
