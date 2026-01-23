@@ -25,7 +25,6 @@ var defaultManifestMediaTypes = []string{
 	MediaTypeManifestList,
 	ocispec.MediaTypeImageManifest,
 	ocispec.MediaTypeImageIndex,
-	ocispec.MediaTypeArtifactManifest,
 }
 
 type InternalDst struct {
