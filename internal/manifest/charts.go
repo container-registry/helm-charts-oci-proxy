@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
 	helmregistry "helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/repo"
 	"io"
@@ -23,6 +25,16 @@ import (
 	"strings"
 	"time"
 )
+
+// extractChartMeta extracts metadata from a Helm chart archive.
+// This is used to populate the OCI config layer with Chart.yaml contents.
+func extractChartMeta(chartData []byte) (*chart.Metadata, error) {
+	ch, err := loader.LoadArchive(bytes.NewReader(chartData))
+	if err != nil {
+		return nil, err
+	}
+	return ch.Metadata, nil
+}
 
 // getDeterministicCreatedTimestamp returns a deterministic timestamp for a chart version.
 // This ensures that the same chart version always produces the same OCI manifest,
@@ -133,7 +145,24 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	memStore := memory.New()
 
-	configData := []byte("{}")
+	// Extract chart metadata from the tarball to populate the OCI config layer
+	// This provides the Chart.yaml contents as required by the Helm OCI spec
+	chartMeta, err := extractChartMeta(manifestData)
+	if err != nil {
+		m.log.Printf("warning: failed to extract chart metadata: %v, using empty config", err)
+		chartMeta = nil
+	}
+
+	var configData []byte
+	if chartMeta != nil {
+		configData, err = json.Marshal(chartMeta)
+		if err != nil {
+			m.log.Printf("warning: failed to marshal chart metadata: %v, using empty config", err)
+			configData = []byte("{}")
+		}
+	} else {
+		configData = []byte("{}")
+	}
 
 	desc := ocispec.Descriptor{
 		MediaType: helmregistry.ConfigMediaType,
