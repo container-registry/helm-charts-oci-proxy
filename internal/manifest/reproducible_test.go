@@ -7,6 +7,7 @@ import (
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/repo"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // TestGetDeterministicCreatedTimestamp tests the function used for OCI manifest annotations
@@ -120,6 +121,104 @@ func TestDeterministicTimestampAcrossCharts(t *testing.T) {
 		if !ts.Equal(timestamps[i]) {
 			t.Errorf("Timestamp not stable for chart %d: got %v, expected %v", i, ts, timestamps[i])
 		}
+	}
+}
+
+// TestGenerateOCIAnnotations verifies the generateOCIAnnotations helper function
+func TestGenerateOCIAnnotations(t *testing.T) {
+	fixedTime := time.Date(2025, 12, 15, 17, 31, 44, 0, time.UTC)
+	createdStr := fixedTime.Format(time.RFC3339)
+
+	t.Run("nil metadata returns only created annotation", func(t *testing.T) {
+		got := generateOCIAnnotations(nil, fixedTime)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 annotation, got %d: %v", len(got), got)
+		}
+		if got[ocispec.AnnotationCreated] != createdStr {
+			t.Errorf("expected created %s, got %s", createdStr, got[ocispec.AnnotationCreated])
+		}
+	})
+
+	t.Run("minimal chart with only name and version", func(t *testing.T) {
+		meta := &chart.Metadata{Name: "mychart", Version: "1.2.3"}
+		got := generateOCIAnnotations(meta, fixedTime)
+		assertEqual(t, got, ocispec.AnnotationTitle, "mychart")
+		assertEqual(t, got, ocispec.AnnotationVersion, "1.2.3")
+		assertEqual(t, got, ocispec.AnnotationCreated, createdStr)
+		assertAbsent(t, got, ocispec.AnnotationDescription)
+		assertAbsent(t, got, ocispec.AnnotationURL)
+		assertAbsent(t, got, ocispec.AnnotationSource)
+		assertAbsent(t, got, ocispec.AnnotationAuthors)
+	})
+
+	t.Run("chart with all fields", func(t *testing.T) {
+		meta := &chart.Metadata{
+			Name:        "harbor",
+			Version:     "1.18.1",
+			Description: "An open source trusted cloud native registry",
+			Home:        "https://goharbor.io",
+			Sources:     []string{"https://github.com/goharbor/harbor", "https://github.com/goharbor/other"},
+			Maintainers: []*chart.Maintainer{
+				{Name: "Yan Wang", Email: "yan@example.com"},
+				{Name: "Stone Zhang", Email: "stone@example.com"},
+			},
+		}
+		got := generateOCIAnnotations(meta, fixedTime)
+		assertEqual(t, got, ocispec.AnnotationTitle, "harbor")
+		assertEqual(t, got, ocispec.AnnotationVersion, "1.18.1")
+		assertEqual(t, got, ocispec.AnnotationDescription, "An open source trusted cloud native registry")
+		assertEqual(t, got, ocispec.AnnotationURL, "https://goharbor.io")
+		// Only Sources[0] should be used
+		assertEqual(t, got, ocispec.AnnotationSource, "https://github.com/goharbor/harbor")
+		assertEqual(t, got, ocispec.AnnotationAuthors, "Yan Wang (yan@example.com), Stone Zhang (stone@example.com)")
+	})
+
+	t.Run("maintainer without email uses name only", func(t *testing.T) {
+		meta := &chart.Metadata{
+			Name:        "mychart",
+			Version:     "1.0.0",
+			Maintainers: []*chart.Maintainer{{Name: "Alice"}, {Name: "Bob", Email: "bob@example.com"}},
+		}
+		got := generateOCIAnnotations(meta, fixedTime)
+		assertEqual(t, got, ocispec.AnnotationAuthors, "Alice, Bob (bob@example.com)")
+	})
+
+	t.Run("custom annotations are copied", func(t *testing.T) {
+		meta := &chart.Metadata{
+			Name:        "mychart",
+			Version:     "1.0.0",
+			Annotations: map[string]string{"artifacthub.io/changes": "fix bug"},
+		}
+		got := generateOCIAnnotations(meta, fixedTime)
+		assertEqual(t, got, "artifacthub.io/changes", "fix bug")
+	})
+
+	t.Run("custom annotations cannot override title or version", func(t *testing.T) {
+		meta := &chart.Metadata{
+			Name:    "mychart",
+			Version: "1.0.0",
+			Annotations: map[string]string{
+				ocispec.AnnotationTitle:   "hacked-title",
+				ocispec.AnnotationVersion: "hacked-version",
+			},
+		}
+		got := generateOCIAnnotations(meta, fixedTime)
+		assertEqual(t, got, ocispec.AnnotationTitle, "mychart")
+		assertEqual(t, got, ocispec.AnnotationVersion, "1.0.0")
+	})
+}
+
+func assertEqual(t *testing.T, annotations map[string]string, key, expected string) {
+	t.Helper()
+	if got, ok := annotations[key]; !ok || got != expected {
+		t.Errorf("annotation %s: expected %q, got %q (present=%v)", key, expected, got, ok)
+	}
+}
+
+func assertAbsent(t *testing.T, annotations map[string]string, key string) {
+	t.Helper()
+	if _, ok := annotations[key]; ok {
+		t.Errorf("annotation %s should be absent, but got %q", key, annotations[key])
 	}
 }
 
