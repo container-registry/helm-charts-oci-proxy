@@ -36,6 +36,55 @@ func extractChartMeta(chartData []byte) (*chart.Metadata, error) {
 	return ch.Metadata, nil
 }
 
+// generateOCIAnnotations mirrors Helm's generateOCIAnnotations() behavior,
+// producing OCI image annotations from chart metadata.
+// Order matches Helm: standard annotations first, then custom annotations
+// from Chart.yaml can override everything except title and version.
+// If meta is nil, it returns a map with only the created annotation.
+func generateOCIAnnotations(meta *chart.Metadata, created time.Time) map[string]string {
+	annotations := map[string]string{
+		ocispec.AnnotationCreated: created.Format(time.RFC3339),
+	}
+	if meta == nil {
+		return annotations
+	}
+
+	// Standard OCI annotations first
+	annotations[ocispec.AnnotationTitle] = meta.Name
+	annotations[ocispec.AnnotationVersion] = meta.Version
+
+	if meta.Description != "" {
+		annotations[ocispec.AnnotationDescription] = meta.Description
+	}
+	if meta.Home != "" {
+		annotations[ocispec.AnnotationURL] = meta.Home
+	}
+	if len(meta.Sources) > 0 {
+		annotations[ocispec.AnnotationSource] = meta.Sources[0]
+	}
+	if len(meta.Maintainers) > 0 {
+		var parts []string
+		for _, m := range meta.Maintainers {
+			if m.Email != "" {
+				parts = append(parts, fmt.Sprintf("%s (%s)", m.Name, m.Email))
+			} else {
+				parts = append(parts, m.Name)
+			}
+		}
+		annotations[ocispec.AnnotationAuthors] = strings.Join(parts, ", ")
+	}
+
+	// Custom annotations from Chart.yaml override standard ones, except title and version
+	for k, v := range meta.Annotations {
+		if k == ocispec.AnnotationTitle || k == ocispec.AnnotationVersion {
+			continue
+		}
+		annotations[k] = v
+	}
+
+	return annotations
+}
+
 // getDeterministicCreatedTimestamp returns a deterministic timestamp for a chart version.
 // This ensures that the same chart version always produces the same OCI manifest,
 // making artifacts reproducible and fixing FluxCD reconciliation issues.
@@ -136,15 +185,6 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		}
 	}
 
-	// Set deterministic timestamp for OCI manifest to ensure reproducible artifacts
-	deterministicTime := getDeterministicCreatedTimestamp(chartVer)
-	packOpts := oras.PackOptions{
-		ManifestAnnotations: map[string]string{
-			ocispec.AnnotationCreated: deterministicTime.Format(time.RFC3339),
-		},
-	}
-	memStore := memory.New()
-
 	// Extract chart metadata from the tarball to populate the OCI config layer
 	// This provides the Chart.yaml contents as required by the Helm OCI spec
 	chartMeta, err := extractChartMeta(manifestData)
@@ -152,6 +192,13 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		m.log.Printf("warning: failed to extract chart metadata: %v, using empty config", err)
 		chartMeta = nil
 	}
+
+	// Set deterministic timestamp for OCI manifest to ensure reproducible artifacts
+	deterministicTime := getDeterministicCreatedTimestamp(chartVer)
+	packOpts := oras.PackOptions{
+		ManifestAnnotations: generateOCIAnnotations(chartMeta, deterministicTime),
+	}
+	memStore := memory.New()
 
 	var configData []byte
 	if chartMeta != nil {
