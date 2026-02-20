@@ -181,7 +181,8 @@ func resolveChartURL(t *testing.T, indexURL, chartName, version string) string {
 func downloadBytes(t *testing.T, url string) []byte {
 	t.Helper()
 
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		t.Fatalf("failed to download %s: %v", url, err)
 	}
