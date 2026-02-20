@@ -206,6 +206,161 @@ func TestGenerateOCIAnnotations(t *testing.T) {
 		assertEqual(t, got, ocispec.AnnotationTitle, "mychart")
 		assertEqual(t, got, ocispec.AnnotationVersion, "1.0.0")
 	})
+
+	t.Run("custom annotations can override non-protected standard annotations", func(t *testing.T) {
+		meta := &chart.Metadata{
+			Name:        "mychart",
+			Version:     "1.0.0",
+			Description: "standard description",
+			Home:        "https://standard.example.com",
+			Annotations: map[string]string{
+				ocispec.AnnotationDescription: "custom description",
+				ocispec.AnnotationURL:         "https://custom.example.com",
+			},
+		}
+		got := generateOCIAnnotations(meta, fixedTime)
+		// Custom annotations override description and url (matching Helm behavior)
+		assertEqual(t, got, ocispec.AnnotationDescription, "custom description")
+		assertEqual(t, got, ocispec.AnnotationURL, "https://custom.example.com")
+		// But title and version still come from metadata fields
+		assertEqual(t, got, ocispec.AnnotationTitle, "mychart")
+		assertEqual(t, got, ocispec.AnnotationVersion, "1.0.0")
+	})
+}
+
+// TestGenerateOCIAnnotations_RealCharts verifies annotation output against
+// real-world chart metadata from Harbor, ingress-nginx, and cert-manager.
+func TestGenerateOCIAnnotations_RealCharts(t *testing.T) {
+	fixedTime := time.Date(2025, 12, 15, 17, 31, 44, 0, time.UTC)
+	createdStr := fixedTime.Format(time.RFC3339)
+
+	tests := []struct {
+		name     string
+		meta     *chart.Metadata
+		expected map[string]string
+		absent   []string
+	}{
+		{
+			name: "harbor",
+			meta: &chart.Metadata{
+				Name:        "harbor",
+				Version:     "1.18.2",
+				Description: "An open source trusted cloud native registry that stores, signs, and scans content",
+				Home:        "https://goharbor.io",
+				Sources:     []string{"https://github.com/goharbor/harbor", "https://github.com/goharbor/harbor-helm"},
+				Maintainers: []*chart.Maintainer{
+					{Name: "Yan Wang", Email: "yan-yw.wang@broadcom.com"},
+					{Name: "Stone Zhang", Email: "stone.zhang@broadcom.com"},
+					{Name: "Miner Yang", Email: "miner.yang@broadcom.com"},
+				},
+			},
+			expected: map[string]string{
+				ocispec.AnnotationTitle:       "harbor",
+				ocispec.AnnotationVersion:     "1.18.2",
+				ocispec.AnnotationDescription: "An open source trusted cloud native registry that stores, signs, and scans content",
+				ocispec.AnnotationURL:         "https://goharbor.io",
+				ocispec.AnnotationSource:      "https://github.com/goharbor/harbor",
+				ocispec.AnnotationAuthors:     "Yan Wang (yan-yw.wang@broadcom.com), Stone Zhang (stone.zhang@broadcom.com), Miner Yang (miner.yang@broadcom.com)",
+				ocispec.AnnotationCreated:     createdStr,
+			},
+		},
+		{
+			name: "ingress-nginx",
+			meta: &chart.Metadata{
+				Name:        "ingress-nginx",
+				Version:     "4.14.3",
+				Description: "Ingress controller for Kubernetes using NGINX as a reverse proxy and load balancer",
+				Home:        "https://github.com/kubernetes/ingress-nginx",
+				Sources:     []string{"https://github.com/kubernetes/ingress-nginx"},
+				Maintainers: []*chart.Maintainer{
+					{Name: "cpanato"},
+					{Name: "Gacko"},
+					{Name: "strongjz"},
+					{Name: "tao12345666333"},
+				},
+				Annotations: map[string]string{
+					"artifacthub.io/changes":    "- Update Ingress-Nginx version controller-v1.14.3\n",
+					"artifacthub.io/prerelease": "false",
+				},
+			},
+			expected: map[string]string{
+				ocispec.AnnotationTitle:       "ingress-nginx",
+				ocispec.AnnotationVersion:     "4.14.3",
+				ocispec.AnnotationDescription: "Ingress controller for Kubernetes using NGINX as a reverse proxy and load balancer",
+				ocispec.AnnotationURL:         "https://github.com/kubernetes/ingress-nginx",
+				ocispec.AnnotationSource:      "https://github.com/kubernetes/ingress-nginx",
+				ocispec.AnnotationAuthors:     "cpanato, Gacko, strongjz, tao12345666333",
+				ocispec.AnnotationCreated:     createdStr,
+				"artifacthub.io/changes":      "- Update Ingress-Nginx version controller-v1.14.3\n",
+				"artifacthub.io/prerelease":   "false",
+			},
+		},
+		{
+			name: "cert-manager",
+			meta: &chart.Metadata{
+				Name:        "cert-manager",
+				Version:     "v1.19.3",
+				Description: "A Helm chart for cert-manager",
+				Home:        "https://cert-manager.io",
+				Sources:     []string{"https://github.com/cert-manager/cert-manager"},
+				Maintainers: []*chart.Maintainer{
+					{Name: "cert-manager-maintainers", Email: "cert-manager-maintainers@googlegroups.com"},
+				},
+				Annotations: map[string]string{
+					"artifacthub.io/category":   "security",
+					"artifacthub.io/license":    "Apache-2.0",
+					"artifacthub.io/prerelease": "false",
+					"artifacthub.io/signKey":    "fingerprint: 1020CF3C033D4F35BAE1C19E1226061C665DF13E\nurl: https://cert-manager.io/public-keys/cert-manager-keyring-2021-09-20-1020CF3C033D4F35BAE1C19E1226061C665DF13E.gpg\n",
+				},
+			},
+			expected: map[string]string{
+				ocispec.AnnotationTitle:       "cert-manager",
+				ocispec.AnnotationVersion:     "v1.19.3",
+				ocispec.AnnotationDescription: "A Helm chart for cert-manager",
+				ocispec.AnnotationURL:         "https://cert-manager.io",
+				ocispec.AnnotationSource:      "https://github.com/cert-manager/cert-manager",
+				ocispec.AnnotationAuthors:     "cert-manager-maintainers (cert-manager-maintainers@googlegroups.com)",
+				ocispec.AnnotationCreated:     createdStr,
+				"artifacthub.io/category":     "security",
+				"artifacthub.io/license":      "Apache-2.0",
+				"artifacthub.io/prerelease":   "false",
+				"artifacthub.io/signKey":      "fingerprint: 1020CF3C033D4F35BAE1C19E1226061C665DF13E\nurl: https://cert-manager.io/public-keys/cert-manager-keyring-2021-09-20-1020CF3C033D4F35BAE1C19E1226061C665DF13E.gpg\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := generateOCIAnnotations(tt.meta, fixedTime)
+
+			// Check every expected annotation is present and correct
+			for key, want := range tt.expected {
+				if val, ok := got[key]; !ok {
+					t.Errorf("missing annotation %s\n  expected: %q", key, want)
+				} else if val != want {
+					t.Errorf("annotation %s\n  expected: %q\n       got: %q", key, want, val)
+				}
+			}
+
+			// Check no unexpected annotations exist
+			for key := range got {
+				if _, ok := tt.expected[key]; !ok {
+					t.Errorf("unexpected annotation %s = %q", key, got[key])
+				}
+			}
+
+			// Check absent annotations
+			for _, key := range tt.absent {
+				assertAbsent(t, got, key)
+			}
+
+			// Log the full annotation set for manual inspection
+			t.Logf("=== %s annotations ===", tt.name)
+			for k, v := range got {
+				t.Logf("  %s: %q", k, v)
+			}
+		})
+	}
 }
 
 func assertEqual(t *testing.T, annotations map[string]string, key, expected string) {

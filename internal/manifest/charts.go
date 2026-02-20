@@ -38,6 +38,8 @@ func extractChartMeta(chartData []byte) (*chart.Metadata, error) {
 
 // generateOCIAnnotations mirrors Helm's generateOCIAnnotations() behavior,
 // producing OCI image annotations from chart metadata.
+// Order matches Helm: standard annotations first, then custom annotations
+// from Chart.yaml can override everything except title and version.
 // If meta is nil, it returns a map with only the created annotation.
 func generateOCIAnnotations(meta *chart.Metadata, created time.Time) map[string]string {
 	annotations := map[string]string{
@@ -47,16 +49,7 @@ func generateOCIAnnotations(meta *chart.Metadata, created time.Time) map[string]
 		return annotations
 	}
 
-	// Copy custom annotations from Chart.yaml first (they can be overridden by standard ones below)
-	for k, v := range meta.Annotations {
-		// Do not allow overriding title or version via custom annotations
-		if k == ocispec.AnnotationTitle || k == ocispec.AnnotationVersion {
-			continue
-		}
-		annotations[k] = v
-	}
-
-	// Standard OCI annotations — always set title and version
+	// Standard OCI annotations first
 	annotations[ocispec.AnnotationTitle] = meta.Name
 	annotations[ocispec.AnnotationVersion] = meta.Version
 
@@ -79,6 +72,14 @@ func generateOCIAnnotations(meta *chart.Metadata, created time.Time) map[string]
 			}
 		}
 		annotations[ocispec.AnnotationAuthors] = strings.Join(parts, ", ")
+	}
+
+	// Custom annotations from Chart.yaml override standard ones, except title and version
+	for k, v := range meta.Annotations {
+		if k == ocispec.AnnotationTitle || k == ocispec.AnnotationVersion {
+			continue
+		}
+		annotations[k] = v
 	}
 
 	return annotations
