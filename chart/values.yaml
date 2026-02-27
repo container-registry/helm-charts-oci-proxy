@@ -8,7 +8,7 @@ image:
   repository: 8gears.container-registry.com/library/helm-charts-oci-proxy
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
-  tag: latest
+  tag: ""
 
 imagePullSecrets: []
 
@@ -72,6 +72,7 @@ resources:
 # persistence
 persistence:
   enabled: false
+  existingClaim: ""
   size: 5Gi
   # storageClass: "-"
   accessMode: ReadWriteOnce
@@ -95,4 +96,11 @@ app:
   env_vars:
     DEBUG: false
     USE_TLS: false
-    CACHE_TTL: 3600
+    MANIFEST_CACHE_TTL: 60
+    INDEX_CACHE_TTL: 14400
+    INDEX_ERROR_CACHE_TTL: 30
+    REWRITE_DEPENDENCIES: false
+    PROXY_HOST: ""
+
+extraVolumes: []
+extraVolumeMounts: []

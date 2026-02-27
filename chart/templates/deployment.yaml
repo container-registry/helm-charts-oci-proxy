@@ -42,6 +42,9 @@ spec:
             {{- else }}
           emptyDir: { }
             {{- end }}
+        {{- with .Values.extraVolumes }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           securityContext:
@@ -56,12 +59,12 @@ spec:
             httpGet:
               path: /api/version
               port: http
-              scheme: {{- if .Values.app.useTLS }} HTTPS {{ else }} HTTP {{- end }}
+              scheme: {{- if .Values.app.env_vars.USE_TLS }} HTTPS {{ else }} HTTP {{- end }}
           readinessProbe:
             httpGet:
               path: /api/version
               port: http
-              scheme: {{- if .Values.app.useTLS }} HTTPS {{ else }} HTTP {{- end }}
+              scheme: {{- if .Values.app.env_vars.USE_TLS }} HTTPS {{ else }} HTTP {{- end }}
           env:
             {{- range $key, $value := .Values.app.env_vars }}
             - name: {{ $key }}
@@ -69,6 +72,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/data
+            {{- with .Values.extraVolumeMounts }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
