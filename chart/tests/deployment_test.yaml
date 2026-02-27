@@ -1,0 +1,197 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+
+tests:
+  #
+  # Probe scheme — USE_TLS truthiness
+  #
+  - it: should use HTTP scheme when USE_TLS is false (bool)
+    set:
+      app.env_vars.USE_TLS: false
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTP
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTP
+
+  - it: should use HTTPS scheme when USE_TLS is true (bool)
+    set:
+      app.env_vars.USE_TLS: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+
+  - it: should use HTTP scheme when USE_TLS is string "false"
+    set:
+      app.env_vars.USE_TLS: "false"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTP
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTP
+
+  - it: should use HTTPS scheme when USE_TLS is string "true"
+    set:
+      app.env_vars.USE_TLS: "true"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+
+  - it: should use HTTPS scheme when USE_TLS is string "True" (mixed case)
+    set:
+      app.env_vars.USE_TLS: "True"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+
+  #
+  # extraVolumes / extraVolumeMounts
+  #
+  - it: should not render extraVolumes when empty
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: custom-ca
+          any: true
+
+  - it: should render extraVolumes
+    set:
+      extraVolumes:
+        - name: custom-ca
+          configMap:
+            name: ca-bundle
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: custom-ca
+            configMap:
+              name: ca-bundle
+
+  - it: should not render extraVolumeMounts when empty
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-ca
+          any: true
+
+  - it: should render extraVolumeMounts
+    set:
+      extraVolumeMounts:
+        - name: custom-ca
+          mountPath: /etc/ssl/custom
+          readOnly: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-ca
+            mountPath: /etc/ssl/custom
+            readOnly: true
+
+  #
+  # Environment variables
+  #
+  - it: should render all default env vars with correct names
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MANIFEST_CACHE_TTL
+            value: "60"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INDEX_CACHE_TTL
+            value: "14400"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: INDEX_ERROR_CACHE_TTL
+            value: "30"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REWRITE_DEPENDENCIES
+            value: "false"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CACHE_TTL
+          any: true
+
+  #
+  # Image tag fallback
+  #
+  - it: should use appVersion when image.tag is empty
+    chart:
+      appVersion: "1.0.0"
+    set:
+      image.tag: ""
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ":1\\.0\\.0$"
+
+  - it: should use explicit tag when set
+    set:
+      image.tag: "v2.0.0"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ":v2\\.0\\.0$"
+
+  #
+  # Persistence
+  #
+  - it: should use emptyDir when persistence is disabled
+    set:
+      persistence.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}
+
+  - it: should use PVC when persistence is enabled
+    set:
+      persistence.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: RELEASE-NAME-helm-charts-oci-proxy
+
+  - it: should use existingClaim when set
+    set:
+      persistence.enabled: true
+      persistence.existingClaim: my-existing-pvc
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            persistentVolumeClaim:
+              claimName: my-existing-pvc

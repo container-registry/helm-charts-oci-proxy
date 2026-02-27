@@ -59,12 +59,12 @@ spec:
             httpGet:
               path: /api/version
               port: http
-              scheme: {{- if .Values.app.env_vars.USE_TLS }} HTTPS {{ else }} HTTP {{- end }}
+              scheme: {{- if eq (lower (toString .Values.app.env_vars.USE_TLS)) "true" }} HTTPS {{ else }} HTTP {{- end }}
           readinessProbe:
             httpGet:
               path: /api/version
               port: http
-              scheme: {{- if .Values.app.env_vars.USE_TLS }} HTTPS {{ else }} HTTP {{- end }}
+              scheme: {{- if eq (lower (toString .Values.app.env_vars.USE_TLS)) "true" }} HTTPS {{ else }} HTTP {{- end }}
           env:
             {{- range $key, $value := .Values.app.env_vars }}
             - name: {{ $key }}
