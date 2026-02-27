@@ -18,3 +18,5 @@ helm-charts-oci-proxy
 # vendor/
 go.work
 .idea
+.env
+.secrets
