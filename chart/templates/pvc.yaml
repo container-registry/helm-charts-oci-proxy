@@ -9,10 +9,7 @@ metadata:
 {{ toYaml . | indent 4 }}
 {{- end }}
   labels:
-    app: {{ template "ocip.fullname" . }}
-    chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
-    release: "{{ .Release.Name }}"
-    heritage: "{{ .Release.Service }}"
+    {{- include "ocip.labels" . | nindent 4 }}
 spec:
   accessModes:
     - {{ .Values.persistence.accessMode | quote }}

@@ -1,0 +1,65 @@
+suite: pvc
+templates:
+  - templates/pvc.yaml
+
+tests:
+  - it: should not render PVC when persistence is disabled
+    set:
+      persistence.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render PVC when persistence is enabled
+    set:
+      persistence.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PersistentVolumeClaim
+
+  - it: should use standard labels
+    set:
+      persistence.enabled: true
+    asserts:
+      - isNotEmpty:
+          path: metadata.labels["app.kubernetes.io/name"]
+      - isNotEmpty:
+          path: metadata.labels["app.kubernetes.io/instance"]
+      - isNotEmpty:
+          path: metadata.labels["helm.sh/chart"]
+      - isNotEmpty:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+      - notExists:
+          path: metadata.labels.heritage
+      - notExists:
+          path: metadata.labels.chart
+      - notExists:
+          path: metadata.labels.release
+
+  - it: should not render PVC when existingClaim is set
+    set:
+      persistence.enabled: true
+      persistence.existingClaim: my-existing-pvc
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should respect storage size
+    set:
+      persistence.enabled: true
+      persistence.size: 10Gi
+    asserts:
+      - equal:
+          path: spec.resources.requests.storage
+          value: "10Gi"
+
+  - it: should respect access mode
+    set:
+      persistence.enabled: true
+      persistence.accessMode: ReadWriteMany
+    asserts:
+      - contains:
+          path: spec.accessModes
+          content: ReadWriteMany
