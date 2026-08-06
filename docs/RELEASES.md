@@ -79,7 +79,9 @@ federated robot account via a claim rule on `repository == container-registry/he
 
 1. **Harbor**: federated robot with claim rule `repository == container-registry/helm-charts-oci-proxy`,
    audience `https://8gears.container-registry.com`, push+pull on `library` and on the PR
-   preview project. The PR preview project (e.g. `library-dev`) must exist.
+   preview project. The PR preview project (e.g. `library-dev`) must exist, and should carry a
+   tag retention policy (e.g. keep `pr-*` tags for 14 days) — nothing deletes preview tags
+   when PRs close.
 2. **GitHub repo settings**: squash merge only (default message: PR title); Settings →
    Actions → General → "Allow GitHub Actions to create and approve pull requests" enabled.
 3. **GitHub variables**: `REGISTRY_ADDRESS` (optional, default `8gears.container-registry.com`),

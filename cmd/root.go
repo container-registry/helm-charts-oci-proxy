@@ -15,6 +15,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/container-registry/helm-charts-oci-proxy/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -42,7 +44,8 @@ func newCmdVersion() *cobra.Command {
 		Short: "Print the version",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, _ []string) {
-			cmd.Println(version.Version)
+			// cmd.Println falls back to stderr; scripts pipe this output.
+			fmt.Fprintln(cmd.OutOrStdout(), version.Version)
 		},
 	}
 }

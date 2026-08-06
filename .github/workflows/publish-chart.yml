@@ -67,6 +67,7 @@ jobs:
           response=$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://${REGISTRY_ADDRESS}")
           token=$(jq -r '.value' <<<"${response}")
+          [ -n "${token}" ] && [ "${token}" != "null" ] || { echo "OIDC token mint failed" >&2; exit 1; }
           echo "::add-mask::${token}"
           # Username is ignored; Harbor maps the JWT to a federated robot via claim rules.
           helm registry login "${REGISTRY_ADDRESS}" --username jwt --password-stdin <<< "${token}"

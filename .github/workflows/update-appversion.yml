@@ -7,6 +7,10 @@ on:
         description: Released app version, v-prefixed (e.g. v1.0.0)
         type: string
         required: true
+    secrets:
+      RELEASE_BOT_TOKEN:
+        description: Optional PAT so the bot PR triggers chart CI
+        required: false
 
 permissions: {}
 
