@@ -8,6 +8,11 @@ type Config struct {
 	IndexCacheTTL      time.Duration
 	IndexErrorCacheTTl time.Duration
 
+	// AllowPrivateNetworks permits upstream downloads from private, loopback,
+	// and link-local addresses (e.g. proxying an internal chart repository).
+	// Off by default as an SSRF guard.
+	AllowPrivateNetworks bool
+
 	// RewriteDependencies enables rewriting of chart dependency URLs to point through the proxy
 	RewriteDependencies bool
 	// ProxyHost is the hostname used for rewritten dependency URLs.

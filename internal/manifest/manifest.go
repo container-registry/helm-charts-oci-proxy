@@ -45,6 +45,7 @@ type Manifests struct {
 	cache       Cache
 	blobHandler handler.BlobHandler
 	config      Config
+	httpClient  *http.Client
 }
 
 func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
@@ -55,6 +56,7 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		log:         log,
 		config:      config,
 		cache:       cache,
+		httpClient:  newDownloadClient(config.AllowPrivateNetworks),
 	}
 
 	go func() {
