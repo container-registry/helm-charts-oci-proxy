@@ -44,7 +44,8 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install helm-unittest plugin
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.1.2
+        # --verify=false: helm v4 requires it for plugins without provenance signatures.
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.1.2 --verify=false
 
       - name: Lint chart
         run: task chart:lint
