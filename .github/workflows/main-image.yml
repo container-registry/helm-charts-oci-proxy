@@ -8,6 +8,10 @@ on:
       - 'chart/**'
       - 'docs/**'
       - '**.md'
+      # Release PR merges only touch these; publish-image already builds the
+      # release commit as vX.Y.Z/latest, so a byte-identical `main` build is waste.
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
   workflow_dispatch:
 
 permissions: {}
@@ -19,20 +23,9 @@ concurrency:
   group: main-image-${{ github.ref }}
 
 jobs:
-  shortsha:
-    runs-on: ubuntu-latest
-    permissions: {}
-    outputs:
-      shortsha: ${{ steps.shortsha.outputs.shortsha }}
-    steps:
-      - name: Compute short SHA
-        id: shortsha
-        env:
-          SHA: ${{ github.sha }}
-        run: echo "shortsha=${SHA:0:7}" >> "$GITHUB_OUTPUT"
-
   publish:
-    needs: shortsha
+    # workflow_dispatch from any other ref must not overwrite the rolling `main` tag.
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       id-token: write
@@ -40,6 +33,6 @@ jobs:
     with:
       checkout_ref: ${{ github.sha }}
       image_tag: main
-      extra_tag: main-${{ needs.shortsha.outputs.shortsha }}
+      extra_tag: main-{shortsha}
       registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
       registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}

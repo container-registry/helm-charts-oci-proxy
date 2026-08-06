@@ -14,9 +14,6 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: update-appversion
-
 jobs:
   update:
     runs-on: ubuntu-latest

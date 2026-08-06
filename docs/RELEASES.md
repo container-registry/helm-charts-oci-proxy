@@ -21,10 +21,12 @@ it must be a [conventional commit](https://www.conventionalcommits.org/) (enforc
 |---|---|---|
 | `feat` | minor | Features |
 | `fix` | patch | Bug Fixes |
-| `perf` | patch | Performance Improvements |
-| `revert` / `refactor` / `docs` | patch | own sections |
 | `feat!` or `BREAKING CHANGE:` footer | major | — |
+| `perf` / `revert` / `refactor` / `docs` | none on their own¹ | own sections |
 | `test` / `chore` / `ci` / `build` | none | hidden |
+
+¹ Not releasable units for the `go`/`helm` release types: alone they open no release PR.
+They land in the changelog once a `feat`/`fix` triggers the next release.
 
 Scope PRs to one package. A commit touching both Go code and `chart/` bumps **both**
 packages — split such changes into separate PRs.
@@ -45,9 +47,11 @@ packages — split such changes into separate PRs.
      release body.
 3. Merging the appVersion PR refreshes the chart release PR.
 4. Merging the **chart** release PR tags `chart-vX.Y.Z` and triggers `publish-chart`:
-   `helm push` to `oci://8gears.container-registry.com/library/helm-charts-oci-proxy`, then an
-   `oras push` of `artifacthub-repo.yml` to the `:artifacthub.io` reference so
-   [Artifact Hub](https://artifacthub.io) indexes the new version.
+   `helm push` to `oci://8gears.container-registry.com/library/helm-charts-oci-proxy`
+   (cosign-signed by digest, like the image), then an `oras push` of `artifacthub-repo.yml`
+   to the `:artifacthub.io` reference so [Artifact Hub](https://artifacthub.io) indexes the
+   new version. Verify the chart signature with
+   `--certificate-identity="https://github.com/container-registry/helm-charts-oci-proxy/.github/workflows/publish-chart.yml@refs/heads/main"`.
 
 The publish jobs are downstream jobs of `release-please.yml` (not `on: push tags`) because
 tags created with `GITHUB_TOKEN` do not trigger other workflows.
@@ -57,7 +61,9 @@ tags created with `GITHUB_TOKEN` do not trigger other workflows.
 - `appVersion` in `chart/Chart.yaml` is v-prefixed (`"v1.0.0"`) and must equal a pushed image
   tag — the chart's default image reference is `<repository>:<appVersion>`.
 - Never re-publish an existing chart version: Artifact Hub cannot re-index an OCI version.
-  release-please's monotonic bumps guarantee this as long as nobody pushes charts by hand.
+  release-please's monotonic bumps guarantee this as long as nobody pushes charts by hand,
+  and `publish-chart` skips the push when the version already exists in the registry, so
+  re-running a partially failed release is safe.
 
 ## Registry authentication (keyless)
 
@@ -77,14 +83,17 @@ federated robot account via a claim rule on `repository == container-registry/he
 
 ## Repository / infrastructure prerequisites
 
-1. **Harbor**: federated robot with claim rule `repository == container-registry/helm-charts-oci-proxy`,
-   audience `https://8gears.container-registry.com`, push+pull on `library` and on the PR
-   preview project. The PR preview project (e.g. `library-dev`) must exist, and should carry a
-   tag retention policy (e.g. keep `pr-*` tags for 14 days) — nothing deletes preview tags
-   when PRs close. Consider two robots with tighter claim rules instead of one: PR builds run
-   PR-controlled workflow code with `id-token: write`, so a robot limited to the dev project
-   (and a release robot additionally matching a claim like `job_workflow_ref` or
-   `ref: refs/heads/main`) keeps pre-merge code away from production push rights.
+1. **Harbor**: two federated robots, both with audience `https://8gears.container-registry.com`.
+   This split is a hard prerequisite, not an option: PR builds run PR-controlled workflow code
+   with `id-token: write`, so any robot a PR can reach must not have production push rights.
+   - *Dev robot*: claim rule `repository == container-registry/helm-charts-oci-proxy`,
+     push+pull limited to the PR preview project (e.g. `library-dev`).
+   - *Release robot*: the same repository claim **plus** `ref == refs/heads/main` (or an
+     equivalent `job_workflow_ref` rule), push+pull on `library`.
+
+   Enable tag immutability in `library` for `v*` and chart semver tags so released artifacts
+   cannot be overwritten. The PR preview project must exist and should carry a tag retention
+   policy (e.g. keep `pr-*` tags for 14 days) — nothing deletes preview tags when PRs close.
 2. **GitHub repo settings**: squash merge only (default message: PR title); Settings →
    Actions → General → "Allow GitHub Actions to create and approve pull requests" enabled.
 3. **GitHub variables**: `REGISTRY_ADDRESS` (optional, default `8gears.container-registry.com`),

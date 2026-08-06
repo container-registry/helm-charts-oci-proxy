@@ -10,7 +10,11 @@ updates:
           - minor
           - patch
   - package-ecosystem: github-actions
-    directory: "/"
+    directories:
+      # "/" only scans .github/workflows; composite actions need their own entries.
+      - "/"
+      - "/.github/actions/setup"
+      - "/.github/actions/harbor-login"
     schedule:
       interval: weekly
     groups:

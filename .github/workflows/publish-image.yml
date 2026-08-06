@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       extra_tag:
-        description: Optional additional image tag
+        description: Optional additional image tag; a literal '{shortsha}' is replaced with the 7-char SHA of the built commit
         required: false
         type: string
         default: ''
@@ -68,25 +68,10 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
-      - name: Mint OIDC token for Harbor
-        id: harbor-oidc
-        env:
-          AUDIENCE: https://${{ inputs.registry_address }}
-        run: |
-          set -euo pipefail
-          response=$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}")
-          token=$(jq -r '.value' <<<"${response}")
-          [ -n "${token}" ] && [ "${token}" != "null" ] || { echo "OIDC token mint failed" >&2; exit 1; }
-          echo "::add-mask::${token}"
-          echo "token=${token}" >> "$GITHUB_OUTPUT"
-      - name: Log in to registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+      - name: Log in to registry via OIDC
+        uses: ./.github/actions/harbor-login
         with:
-          registry: ${{ inputs.registry_address }}
-          # Keyless: the username is ignored, the OIDC JWT is the password
-          username: jwt
-          password: ${{ steps.harbor-oidc.outputs.token }}
+          registry_address: ${{ inputs.registry_address }}
       - name: Build and push
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -96,7 +81,9 @@ jobs:
           set -euo pipefail
           tags=(-t "${IMAGE}:${IMAGE_TAG}")
           if [ -n "${EXTRA_TAG}" ]; then
-            tags+=(-t "${IMAGE}:${EXTRA_TAG}")
+            # {shortsha} is expanded here because caller expressions cannot slice strings.
+            sha=$(git rev-parse HEAD)
+            tags+=(-t "${IMAGE}:${EXTRA_TAG//\{shortsha\}/${sha:0:7}}")
           fi
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
@@ -124,32 +111,23 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     env:
       IMAGE: ${{ inputs.registry_address }}/${{ inputs.registry_project }}/helm-charts-oci-proxy
       DIGEST: ${{ needs.build.outputs.digest }}
     steps:
+      # Checkout only so the repo-local harbor-login action is available.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout_ref }}
+          persist-credentials: false
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-      - name: Mint OIDC token for Harbor
-        id: harbor-oidc
-        env:
-          AUDIENCE: https://${{ inputs.registry_address }}
-        run: |
-          set -euo pipefail
-          response=$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}")
-          token=$(jq -r '.value' <<<"${response}")
-          [ -n "${token}" ] && [ "${token}" != "null" ] || { echo "OIDC token mint failed" >&2; exit 1; }
-          echo "::add-mask::${token}"
-          echo "token=${token}" >> "$GITHUB_OUTPUT"
-      - name: Log in to registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+      - name: Log in to registry via OIDC
+        uses: ./.github/actions/harbor-login
         with:
-          registry: ${{ inputs.registry_address }}
-          # Keyless: the username is ignored, the OIDC JWT is the password
-          username: jwt
-          password: ${{ steps.harbor-oidc.outputs.token }}
+          registry_address: ${{ inputs.registry_address }}
       - name: Sign image
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
       - name: Generate SBOM

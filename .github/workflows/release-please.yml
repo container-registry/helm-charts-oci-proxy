@@ -114,7 +114,7 @@ jobs:
             printf '## Container Image\n\n'
             printf '```\n%s:%s\n%s@%s\n```\n\n' "${IMAGE}" "${TAG_NAME}" "${IMAGE}" "${DIGEST}"
             printf 'Verify signature and SBOM attestation:\n\n'
-            printf '```\ncosign verify \\\n  --certificate-identity-regexp="^https://github.com/%s/.github/workflows/publish-image.yml@.*$" \\\n  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \\\n  %s@%s\n' "${GITHUB_REPOSITORY}" "${IMAGE}" "${DIGEST}"
-            printf 'cosign verify-attestation --type spdxjson \\\n  --certificate-identity-regexp="^https://github.com/%s/.github/workflows/publish-image.yml@.*$" \\\n  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \\\n  %s@%s\n```\n\n' "${GITHUB_REPOSITORY}" "${IMAGE}" "${DIGEST}"
+            printf '```\ncosign verify \\\n  --certificate-identity="https://github.com/%s/.github/workflows/publish-image.yml@refs/heads/main" \\\n  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \\\n  %s@%s\n' "${GITHUB_REPOSITORY}" "${IMAGE}" "${DIGEST}"
+            printf 'cosign verify-attestation --type spdxjson \\\n  --certificate-identity="https://github.com/%s/.github/workflows/publish-image.yml@refs/heads/main" \\\n  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \\\n  %s@%s\n```\n\n' "${GITHUB_REPOSITORY}" "${IMAGE}" "${DIGEST}"
             printf '## Binaries\n\nDownload from the release assets below; verify with `checksums.txt`.\n'
           } | gh release edit "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --notes-file -

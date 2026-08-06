@@ -8,6 +8,9 @@ on:
       - 'chart/**'
       - 'docs/**'
       - '**.md'
+      # Release PRs only touch these (CHANGELOG.md is covered by '**.md').
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
   push:
     branches:
       - main
@@ -15,6 +18,8 @@ on:
       - 'chart/**'
       - 'docs/**'
       - '**.md'
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
 
 permissions:
   contents: read
@@ -30,12 +35,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+      - uses: ./.github/actions/setup
         with:
-          go-version-file: go.mod
-      - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
-        with:
-          version: 3.x
+          go: 'true'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Vet
         run: task app:vet
