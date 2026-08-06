@@ -75,15 +75,28 @@ jobs:
 
       - name: Check for already-published chart version
         id: published
-        # Re-runs must be idempotent: re-pushing a served chart version changes its
-        # digest and Artifact Hub cannot re-index it (docs/RELEASES.md invariant).
+        # Re-pushing a served chart version changes its digest and Artifact Hub
+        # cannot re-index it (docs/RELEASES.md invariant). Only a confirmed 404
+        # may take the push path: a transient fetch error must fail the job, not
+        # masquerade as "not published".
         run: |
           set -euo pipefail
-          if oras manifest fetch "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${CHART_VERSION}" > /dev/null 2>&1; then
-            echo "Chart version ${CHART_VERSION} already published — skipping package/push, running smoke test only."
+          ref="${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${CHART_VERSION}"
+          set +e
+          descriptor=$(oras manifest fetch --descriptor "${ref}" 2>"${RUNNER_TEMP}/fetch-err")
+          rc=$?
+          set -e
+          if [ "${rc}" -eq 0 ]; then
+            digest=$(jq -r '.digest' <<<"${descriptor}")
+            echo "Chart version ${CHART_VERSION} already published (${digest}) — skipping push, repairing signature/metadata if needed."
             echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'not found|MANIFEST_UNKNOWN|NAME_UNKNOWN|404' "${RUNNER_TEMP}/fetch-err"; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            command cat "${RUNNER_TEMP}/fetch-err" >&2
+            echo "Could not determine whether ${ref} exists — refusing to push blindly" >&2
+            exit 1
           fi
 
       - name: Package chart
@@ -105,13 +118,22 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Sign chart
-        if: steps.published.outputs.exists == 'false'
+        # Runs on re-runs too: a previous run may have pushed the chart and died
+        # before signing. Skips only when the signature already exists.
         env:
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: cosign sign --yes "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy@${DIGEST}"
+          DIGEST: ${{ steps.push.outputs.digest || steps.published.outputs.digest }}
+        run: |
+          set -euo pipefail
+          sig_tag="sha256-${DIGEST#sha256:}.sig"
+          if oras manifest fetch --descriptor "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${sig_tag}" > /dev/null 2>&1; then
+            echo "Signature for ${DIGEST} already present, skipping."
+          else
+            cosign sign --yes "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy@${DIGEST}"
+          fi
 
       - name: Push Artifact Hub repository metadata
-        if: steps.published.outputs.exists == 'false'
+        # Unconditional: content-addressed, so re-pushing identical metadata is a
+        # no-op, and re-runs repair a metadata push that previously failed.
         run: |
           oras push "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:artifacthub.io" \
             --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
