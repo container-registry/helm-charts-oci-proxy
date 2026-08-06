@@ -1,0 +1,35 @@
+name: PR Title
+
+# The squash-merge commit message comes from the PR title, and release-please
+# parses it as a conventional commit — so the title must be one.
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - synchronize
+
+permissions:
+  pull-requests: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            revert
+            refactor
+            docs
+            test
+            chore
+            ci
+            build
+          requireScope: false
+          subjectPattern: ^.{1,100}$

@@ -1,0 +1,15 @@
+version: '3'
+
+silent: true
+
+includes:
+  app:
+    taskfile: taskfiles/app.yml
+  chart:
+    taskfile: taskfiles/chart.yml
+
+tasks:
+  default:
+    desc: List all tasks
+    cmds:
+      - task --list-all

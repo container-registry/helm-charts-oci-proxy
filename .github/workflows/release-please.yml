@@ -1,0 +1,116 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-please-${{ github.ref }}
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      app_release_created: ${{ steps.release.outputs.release_created }}
+      app_tag_name: ${{ steps.release.outputs.tag_name }}
+      app_version: ${{ steps.release.outputs.version }}
+      chart_release_created: ${{ steps.release.outputs['chart--release_created'] }}
+      chart_tag_name: ${{ steps.release.outputs['chart--tag_name'] }}
+      chart_version: ${{ steps.release.outputs['chart--version'] }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish-image:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.app_release_created == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      checkout_ref: ${{ needs.release-please.outputs.app_tag_name }}
+      image_tag: ${{ needs.release-please.outputs.app_tag_name }}
+      extra_tag: latest
+      version: ${{ needs.release-please.outputs.app_version }}
+      registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
+      registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}
+
+  publish-binaries:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.app_release_created == 'true' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-binaries.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs.app_tag_name }}
+      version: ${{ needs.release-please.outputs.app_version }}
+
+  # Runs after the image exists so the chart never points at an unpushed tag.
+  update-appversion:
+    needs:
+      - release-please
+      - publish-image
+    if: ${{ needs.release-please.outputs.app_release_created == 'true' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/update-appversion.yml
+    with:
+      version: ${{ needs.release-please.outputs.app_tag_name }}
+
+  publish-chart:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.chart_release_created == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-chart.yml
+    with:
+      chart_version: ${{ needs.release-please.outputs.chart_version }}
+      registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
+      registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}
+
+  update-release-notes:
+    needs:
+      - release-please
+      - publish-image
+      - publish-binaries
+    if: ${{ needs.release-please.outputs.app_release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG_NAME: ${{ needs.release-please.outputs.app_tag_name }}
+      IMAGE: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}/${{ vars.REGISTRY_PROJECT || 'library' }}/helm-charts-oci-proxy
+      DIGEST: ${{ needs.publish-image.outputs.digest }}
+    steps:
+      - name: Append artifact details to release notes
+        run: |
+          set -euo pipefail
+          body=$(gh release view "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --json body -q .body)
+          if grep -q '^## Container Image$' <<<"${body}"; then
+            echo "Release notes already contain artifact section, skipping."
+            exit 0
+          fi
+          {
+            printf '%s\n\n' "${body}"
+            printf '## Container Image\n\n'
+            printf '```\n%s:%s\n%s@%s\n```\n\n' "${IMAGE}" "${TAG_NAME}" "${IMAGE}" "${DIGEST}"
+            printf 'Verify signature and SBOM attestation:\n\n'
+            printf '```\ncosign verify \\\n  --certificate-identity-regexp="^https://github.com/%s/.github/workflows/publish-image.yml@.*$" \\\n  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \\\n  %s@%s\n' "${GITHUB_REPOSITORY}" "${IMAGE}" "${DIGEST}"
+            printf 'cosign verify-attestation --type spdxjson \\\n  --certificate-identity-regexp="^https://github.com/%s/.github/workflows/publish-image.yml@.*$" \\\n  --certificate-oidc-issuer=https://token.actions.githubusercontent.com \\\n  %s@%s\n```\n\n' "${GITHUB_REPOSITORY}" "${IMAGE}" "${DIGEST}"
+            printf '## Binaries\n\nDownload from the release assets below; verify with `checksums.txt`.\n'
+          } | gh release edit "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --notes-file -
