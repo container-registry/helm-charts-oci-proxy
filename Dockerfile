@@ -1,11 +1,14 @@
-FROM cgr.dev/chainguard/go:latest@sha256:ae87411b2d4508b67727c73fc6236c21ca9233fc4e6bade03406b852c244eb8d AS build
+# --platform=$BUILDPLATFORM: run the compiler natively and cross-compile via
+# GOOS/GOARCH; building the arm64 half under QEMU takes ~10x longer.
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/go:latest@sha256:ae87411b2d4508b67727c73fc6236c21ca9233fc4e6bade03406b852c244eb8d AS build
 ARG VERSION=dev
+ARG TARGETOS TARGETARCH
 ENV CGO_ENABLED=0
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN go build -trimpath -ldflags "-s -w -X github.com/container-registry/helm-charts-oci-proxy/internal/version.Version=${VERSION}" -o /proxy .
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X github.com/container-registry/helm-charts-oci-proxy/internal/version.Version=${VERSION}" -o /proxy .
 
 FROM cgr.dev/chainguard/wolfi-base:latest@sha256:ca263a0360cca48e8fe3f86c8af61c6d5b85e484809fe187440a4206a50efc06
 ARG VERSION=dev

@@ -12,8 +12,6 @@ vars:
   # Keyless signing by default (CI); override for local key-based signing, e.g.
   # COSIGN_SIGN_FLAGS="--yes --key cosign.key --tlog-upload=false --allow-http-registry"
   COSIGN_SIGN_FLAGS: '{{.COSIGN_SIGN_FLAGS | default "--yes"}}'
-  CHART_VERSION:
-    sh: yq -r '.version' chart/Chart.yaml
 
 tasks:
   lint:
@@ -44,6 +42,13 @@ tasks:
 
   assert-version:
     desc: Assert chart/Chart.yaml version equals CHART_VERSION
+    vars:
+      # Scoped here, not taskfile-level: a global dynamic var runs for every
+      # chart task and would break lint/template/unittest without yq. Two-var
+      # dance because a plain task-level sh var would shadow the CLI value.
+      FILE_CHART_VERSION:
+        sh: yq -r '.version' chart/Chart.yaml
+      CHART_VERSION: '{{.CHART_VERSION | default .FILE_CHART_VERSION}}'
     cmds:
       - |
         set -euo pipefail
@@ -55,6 +60,13 @@ tasks:
 
   assert-appversion-image:
     desc: Assert the image tag referenced by chart appVersion exists in the registry
+    vars:
+      # The repository a deployed chart actually pulls from, not CHART_REPO:
+      # with a non-default registry project the two diverge, and the assert
+      # must validate the chart's effective default.
+      VALUES_IMAGE_REPO:
+        sh: yq -r '.image.repository' chart/values.yaml
+      IMAGE_REPO: '{{.IMAGE_REPO | default .VALUES_IMAGE_REPO}}'
     cmds:
       - |
         set -euo pipefail
@@ -62,13 +74,17 @@ tasks:
         # "merge the appVersion PR before the chart release PR" rule from
         # docs/RELEASES.md instead of trusting it.
         app_version=$(yq -r '.appVersion' chart/Chart.yaml)
-        if ! oras manifest fetch {{.ORAS_FLAGS}} "{{.CHART_REPO}}:${app_version}" > /dev/null; then
-          echo "Image tag '${app_version}' (chart appVersion) not found in {{.REGISTRY_PROJECT}} — merge the appVersion update PR first" >&2
+        if ! oras manifest fetch {{.ORAS_FLAGS}} "{{.IMAGE_REPO}}:${app_version}" > /dev/null; then
+          echo "Image tag '{{.IMAGE_REPO}}:${app_version}' (chart default image at appVersion) not found — merge the appVersion update PR first" >&2
           exit 1
         fi
 
   publish:
     desc: Package and push the chart unless this version is already in the registry
+    vars:
+      FILE_CHART_VERSION:
+        sh: yq -r '.version' chart/Chart.yaml
+      CHART_VERSION: '{{.CHART_VERSION | default .FILE_CHART_VERSION}}'
     cmds:
       - |
         set -euo pipefail
@@ -97,6 +113,10 @@ tasks:
 
   sign:
     desc: Cosign-sign the published chart by digest (keyless by default)
+    vars:
+      FILE_CHART_VERSION:
+        sh: yq -r '.version' chart/Chart.yaml
+      CHART_VERSION: '{{.CHART_VERSION | default .FILE_CHART_VERSION}}'
     cmds:
       - |
         set -euo pipefail
@@ -115,6 +135,10 @@ tasks:
 
   smoke-test:
     desc: Pull the published chart back and render it
+    vars:
+      FILE_CHART_VERSION:
+        sh: yq -r '.version' chart/Chart.yaml
+      CHART_VERSION: '{{.CHART_VERSION | default .FILE_CHART_VERSION}}'
     cmds:
       - |
         set -euo pipefail
