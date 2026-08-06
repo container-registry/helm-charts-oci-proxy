@@ -12,10 +12,10 @@ The chart is published as an OCI artifact, no repository setup required:
 helm install ocip oci://8gears.container-registry.com/library/helm-charts-oci-proxy
 ```
 
-To pin a specific chart version:
+To pin a specific chart version, add `--version <chart version>`:
 
 ```bash
-helm install ocip oci://8gears.container-registry.com/library/helm-charts-oci-proxy --version 1.2.3
+helm install ocip oci://8gears.container-registry.com/library/helm-charts-oci-proxy --version <chart version>
 ```
 
 ## Values
@@ -40,7 +40,10 @@ helm install ocip oci://8gears.container-registry.com/library/helm-charts-oci-pr
 | `podAnnotations` / `podLabels` / `customLabels` | `{}` | Extra metadata |
 | `podSecurityContext` / `securityContext` | `{}` | Security contexts |
 | `serviceAccount.create` | `false` | Create a dedicated ServiceAccount |
+| `serviceAccount.annotations` | `{}` | Annotations for the ServiceAccount |
 | `serviceAccount.name` | `""` | ServiceAccount name override |
+| `nameOverride` | `""` | Override the chart name used in resource names |
+| `fullnameOverride` | `""` | Override the fully qualified resource name |
 
 ### Service and ingress
 
