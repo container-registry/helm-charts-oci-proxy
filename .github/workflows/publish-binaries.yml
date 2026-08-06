@@ -39,4 +39,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ inputs.tag_name }}
-        run: gh release upload "${TAG_NAME}" dist/*.tar.gz dist/checksums.txt --clobber
+        run: gh release upload "${TAG_NAME}" dist/*.tar.gz dist/checksums.txt --clobber --repo "${GITHUB_REPOSITORY}"

@@ -37,12 +37,17 @@ tasks:
           matrix:
             OS: [linux, darwin]
             ARCH: [amd64, arm64]
-        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags "-s -w -X {{.MODULE}}/internal/version.Version={{.VERSION}}" -o .bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}/proxy .
+        cmd: rm -rf .bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}
       - for:
           matrix:
             OS: [linux, darwin]
             ARCH: [amd64, arm64]
-        cmd: tar -czf dist/helm-charts-oci-proxy_{{.ITEM.OS}}-{{.ITEM.ARCH}}.tar.gz -C .bin/{{.ITEM.OS}}-{{.ITEM.ARCH}} proxy
+        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags "-s -w -X {{.MODULE}}/internal/version.Version={{.VERSION}}" -o .bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}/helm-charts-oci-proxy .
+      - for:
+          matrix:
+            OS: [linux, darwin]
+            ARCH: [amd64, arm64]
+        cmd: tar -czf dist/helm-charts-oci-proxy_{{.ITEM.OS}}-{{.ITEM.ARCH}}.tar.gz -C .bin/{{.ITEM.OS}}-{{.ITEM.ARCH}} helm-charts-oci-proxy
       - |
         cd dist
         if command -v sha256sum >/dev/null 2>&1; then

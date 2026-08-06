@@ -42,6 +42,6 @@ jobs:
       - name: Test
         run: task app:test
       - name: Build
-        run: task app:build
+        run: task app:build VERSION=ci-check
       - name: Version sanity check
-        run: .bin/proxy version
+        run: .bin/proxy version | grep -qx ci-check

@@ -9,7 +9,9 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'Dockerfile'
+      - '.dockerignore'
       - 'taskfiles/app.yml'
+      - 'Taskfile.yml'
       - '.github/workflows/pr-image.yml'
       - '.github/workflows/publish-image.yml'
 
@@ -63,7 +65,7 @@ jobs:
               `docker pull ${image}@${digest}`,
               '```',
             ].join('\n');
-            const { data: comments } = await github.rest.issues.listComments({
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,

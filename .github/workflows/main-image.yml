@@ -37,7 +37,7 @@ jobs:
     uses: ./.github/workflows/publish-image.yml
     with:
       checkout_ref: ${{ github.sha }}
-      image_tag: latest
+      image_tag: main
       extra_tag: main-${{ needs.shortsha.outputs.shortsha }}
       registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
       registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}
