@@ -124,11 +124,19 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest || steps.published.outputs.digest }}
         run: |
           set -euo pipefail
-          sig_tag="sha256-${DIGEST#sha256:}.sig"
-          if oras manifest fetch --descriptor "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${sig_tag}" > /dev/null 2>&1; then
+          sig_ref="${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:sha256-${DIGEST#sha256:}.sig"
+          set +e
+          oras manifest fetch --descriptor "${sig_ref}" > /dev/null 2>"${RUNNER_TEMP}/sig-err"
+          rc=$?
+          set -e
+          if [ "${rc}" -eq 0 ]; then
             echo "Signature for ${DIGEST} already present, skipping."
-          else
+          elif grep -qiE 'not found|MANIFEST_UNKNOWN|NAME_UNKNOWN|404' "${RUNNER_TEMP}/sig-err"; then
             cosign sign --yes "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy@${DIGEST}"
+          else
+            command cat "${RUNNER_TEMP}/sig-err" >&2
+            echo "Could not determine whether ${sig_ref} exists" >&2
+            exit 1
           fi
 
       - name: Push Artifact Hub repository metadata
