@@ -66,7 +66,7 @@ helm install ocip oci://8gears.container-registry.com/library/helm-charts-oci-pr
 | `app.env_vars.MANIFEST_CACHE_TTL` | `60` | Manifest cache duration in seconds |
 | `app.env_vars.INDEX_CACHE_TTL` | `14400` | Chart index cache duration in seconds (4h) |
 | `app.env_vars.INDEX_ERROR_CACHE_TTL` | `30` | Retry delay for failed index fetches in seconds |
-| `app.env_vars.REWRITE_DEPENDENCIES` | `false` | Rewrite chart dependency URLs to point through the proxy |
+| `app.env_vars.REWRITE_DEPENDENCIES` | `false` | Rewrite chart dependency URLs to point through the proxy. **Warning:** modifies the served chart tarball, so upstream signature verification (`.prov` / `helm verify`) fails for rewritten charts |
 | `app.env_vars.PROXY_HOST` | `""` | Override proxy host for rewritten URLs (defaults to request Host header) |
 
 ### Persistence

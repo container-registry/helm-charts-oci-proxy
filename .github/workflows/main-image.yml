@@ -13,8 +13,9 @@ on:
 permissions: {}
 
 concurrency:
+  # No cancel-in-progress: cancelling a run mid docker-push can leave the
+  # rolling `main` tag partial and drops main-<shortsha> images; runs queue instead.
   group: main-image-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   shortsha:

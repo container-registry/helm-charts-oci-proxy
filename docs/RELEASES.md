@@ -81,7 +81,10 @@ federated robot account via a claim rule on `repository == container-registry/he
    audience `https://8gears.container-registry.com`, push+pull on `library` and on the PR
    preview project. The PR preview project (e.g. `library-dev`) must exist, and should carry a
    tag retention policy (e.g. keep `pr-*` tags for 14 days) — nothing deletes preview tags
-   when PRs close.
+   when PRs close. Consider two robots with tighter claim rules instead of one: PR builds run
+   PR-controlled workflow code with `id-token: write`, so a robot limited to the dev project
+   (and a release robot additionally matching a claim like `job_workflow_ref` or
+   `ref: refs/heads/main`) keeps pre-merge code away from production push rights.
 2. **GitHub repo settings**: squash merge only (default message: PR title); Settings →
    Actions → General → "Allow GitHub Actions to create and approve pull requests" enabled.
 3. **GitHub variables**: `REGISTRY_ADDRESS` (optional, default `8gears.container-registry.com`),
