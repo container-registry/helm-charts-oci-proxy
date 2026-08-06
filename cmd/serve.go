@@ -67,6 +67,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 
 			rewriteDeps, _ := env.GetBool("REWRITE_DEPENDENCIES", false)
 			proxyHost := env.GetString("PROXY_HOST", "")
+			allowPrivateNetworks, _ := env.GetBool("ALLOW_PRIVATE_NETWORKS", false)
 
 			useTLS, _ := env.GetBool("USE_TLS", false)
 			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
@@ -95,8 +96,9 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				CacheTTL:            time.Duration(cacheTTL) * time.Second,
 				IndexCacheTTL:       time.Duration(indexCacheTTL) * time.Second,
 				IndexErrorCacheTTl:  time.Duration(indexErrorCacheTTL) * time.Second,
-				RewriteDependencies: rewriteDeps,
-				ProxyHost:           proxyHost,
+				RewriteDependencies:  rewriteDeps,
+				ProxyHost:            proxyHost,
+				AllowPrivateNetworks: allowPrivateNetworks,
 			}, indexCache, l)
 
 			blobsHttpHandler := blobs.NewBlobs(blobsHandler, l)

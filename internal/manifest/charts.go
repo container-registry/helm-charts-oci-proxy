@@ -384,11 +384,20 @@ func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
 
 }
 
-func (m *Manifests) download(url string) ([]byte, error) {
+func (m *Manifests) download(rawURL string) ([]byte, error) {
 	if m.config.Debug {
-		m.log.Printf("downloading : %s\n", url)
+		m.log.Printf("downloading : %s\n", rawURL)
 	}
-	resp, err := http.Get(url)
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	// index.yaml can point anywhere; plain http would undermine both integrity
+	// and the private-network dial guard.
+	if parsed.Scheme != "https" {
+		return nil, fmt.Errorf("refusing non-https download URL %q", rawURL)
+	}
+	resp, err := m.httpClient.Get(rawURL)
 	if err != nil {
 		return nil, err
 	}
