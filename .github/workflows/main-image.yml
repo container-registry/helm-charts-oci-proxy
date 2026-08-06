@@ -1,0 +1,43 @@
+name: Main Image
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'chart/**'
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: main-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shortsha:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      shortsha: ${{ steps.shortsha.outputs.shortsha }}
+    steps:
+      - name: Compute short SHA
+        id: shortsha
+        env:
+          SHA: ${{ github.sha }}
+        run: echo "shortsha=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: shortsha
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      checkout_ref: ${{ github.sha }}
+      image_tag: main
+      extra_tag: main-${{ needs.shortsha.outputs.shortsha }}
+      registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
+      registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}
