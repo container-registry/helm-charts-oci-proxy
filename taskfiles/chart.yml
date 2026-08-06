@@ -1,5 +1,20 @@
 version: '3'
 
+vars:
+  CHART_NAME: helm-charts-oci-proxy
+  REGISTRY_ADDRESS: '{{.REGISTRY_ADDRESS | default "8gears.container-registry.com"}}'
+  REGISTRY_PROJECT: '{{.REGISTRY_PROJECT | default "library"}}'
+  CHART_REPO: '{{.REGISTRY_ADDRESS}}/{{.REGISTRY_PROJECT}}/{{.CHART_NAME}}'
+  # PLAIN_HTTP=true targets a plain-http registry (local testing).
+  PLAIN_HTTP: '{{.PLAIN_HTTP | default "false"}}'
+  ORAS_FLAGS: '{{if eq .PLAIN_HTTP "true"}}--plain-http{{end}}'
+  HELM_OCI_FLAGS: '{{if eq .PLAIN_HTTP "true"}}--plain-http{{end}}'
+  # Keyless signing by default (CI); override for local key-based signing, e.g.
+  # COSIGN_SIGN_FLAGS="--yes --key cosign.key --tlog-upload=false --allow-http-registry"
+  COSIGN_SIGN_FLAGS: '{{.COSIGN_SIGN_FLAGS | default "--yes"}}'
+  CHART_VERSION:
+    sh: yq -r '.version' chart/Chart.yaml
+
 tasks:
   lint:
     desc: Lint the Helm chart (strict)
@@ -26,3 +41,93 @@ tasks:
     desc: Deploy the chart to the ocip-staging namespace
     cmds:
       - helm upgrade -i --namespace ocip-staging --create-namespace ocip-staging ./chart
+
+  assert-version:
+    desc: Assert chart/Chart.yaml version equals CHART_VERSION
+    cmds:
+      - |
+        set -euo pipefail
+        actual=$(yq -r '.version' chart/Chart.yaml)
+        if [ "${actual}" != "{{.CHART_VERSION}}" ]; then
+          echo "chart/Chart.yaml version '${actual}' does not match requested CHART_VERSION '{{.CHART_VERSION}}'" >&2
+          exit 1
+        fi
+
+  assert-appversion-image:
+    desc: Assert the image tag referenced by chart appVersion exists in the registry
+    cmds:
+      - |
+        set -euo pipefail
+        # The chart's default image ref is <repository>:<appVersion>. Enforces the
+        # "merge the appVersion PR before the chart release PR" rule from
+        # docs/RELEASES.md instead of trusting it.
+        app_version=$(yq -r '.appVersion' chart/Chart.yaml)
+        if ! oras manifest fetch {{.ORAS_FLAGS}} "{{.CHART_REPO}}:${app_version}" > /dev/null; then
+          echo "Image tag '${app_version}' (chart appVersion) not found in {{.REGISTRY_PROJECT}} — merge the appVersion update PR first" >&2
+          exit 1
+        fi
+
+  publish:
+    desc: Package and push the chart unless this version is already in the registry
+    cmds:
+      - |
+        set -euo pipefail
+        # Re-pushing a served chart version changes its digest and Artifact Hub
+        # cannot re-index it (docs/RELEASES.md invariant). Only a confirmed 404
+        # may take the push path: a transient fetch error must fail, not
+        # masquerade as "not published".
+        ref="{{.CHART_REPO}}:{{.CHART_VERSION}}"
+        errfile=$(mktemp)
+        set +e
+        oras manifest fetch {{.ORAS_FLAGS}} --descriptor "${ref}" > /dev/null 2>"${errfile}"
+        rc=$?
+        set -e
+        if [ "${rc}" -eq 0 ]; then
+          echo "Chart version {{.CHART_VERSION}} already published — skipping push."
+          exit 0
+        fi
+        if ! grep -qiE 'not found|MANIFEST_UNKNOWN|NAME_UNKNOWN|404' "${errfile}"; then
+          command cat "${errfile}" >&2
+          echo "Could not determine whether ${ref} exists — refusing to push blindly" >&2
+          exit 1
+        fi
+        mkdir -p dist
+        helm package chart -d dist
+        helm push {{.HELM_OCI_FLAGS}} "dist/{{.CHART_NAME}}-{{.CHART_VERSION}}.tgz" "oci://{{.REGISTRY_ADDRESS}}/{{.REGISTRY_PROJECT}}"
+
+  sign:
+    desc: Cosign-sign the published chart by digest (keyless by default)
+    cmds:
+      - |
+        set -euo pipefail
+        # Unconditional so a re-run repairs a missed signature. Re-signing an
+        # already-signed digest appends a duplicate signature; harmless.
+        digest=$(oras resolve {{.ORAS_FLAGS}} "{{.CHART_REPO}}:{{.CHART_VERSION}}")
+        cosign sign {{.COSIGN_SIGN_FLAGS}} "{{.CHART_REPO}}@${digest}"
+
+  push-artifacthub:
+    desc: Push Artifact Hub repository metadata (idempotent, content-addressed)
+    cmds:
+      - |
+        oras push {{.ORAS_FLAGS}} "{{.CHART_REPO}}:artifacthub.io" \
+          --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+          artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+
+  smoke-test:
+    desc: Pull the published chart back and render it
+    cmds:
+      - |
+        set -euo pipefail
+        tmp=$(mktemp -d)
+        helm pull {{.HELM_OCI_FLAGS}} "oci://{{.CHART_REPO}}" --version "{{.CHART_VERSION}}" -d "${tmp}"
+        helm template "${tmp}/{{.CHART_NAME}}-{{.CHART_VERSION}}.tgz"
+
+  release:
+    desc: Full chart publish flow (asserts, idempotent push, sign, metadata, smoke test)
+    cmds:
+      - task: assert-version
+      - task: assert-appversion-image
+      - task: publish
+      - task: sign
+      - task: push-artifacthub
+      - task: smoke-test

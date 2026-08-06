@@ -35,16 +35,6 @@ jobs:
           ref: chart-v${{ inputs.chart_version }}
           persist-credentials: false
 
-      - name: Assert chart version matches tag
-        run: |
-          set -euo pipefail
-          # yq (mikefarah v4) is preinstalled on ubuntu-latest runners.
-          actual=$(yq -r '.version' chart/Chart.yaml)
-          if [ "${actual}" != "${CHART_VERSION}" ]; then
-            echo "chart/Chart.yaml version '${actual}' does not match requested chart_version '${CHART_VERSION}'" >&2
-            exit 1
-          fi
-
       - name: Set up tools
         uses: ./.github/actions/setup
         with:
@@ -61,70 +51,12 @@ jobs:
           # docker included so ~/.docker/config.json carries the credentials cosign reads.
           clients: docker helm oras
 
-      - name: Assert appVersion image exists
-        # The chart's default image ref is <repository>:<appVersion>. Enforces the
-        # "merge the appVersion PR before the chart release PR" rule from
-        # docs/RELEASES.md instead of trusting it.
+      - name: Publish, sign, and smoke test chart
+        # All logic lives in taskfiles/chart.yml so it can be run and tested
+        # locally (see chart:release and the PLAIN_HTTP/COSIGN_SIGN_FLAGS vars);
+        # this workflow only provides checkout, tools, and registry auth.
         run: |
-          set -euo pipefail
-          app_version=$(yq -r '.appVersion' chart/Chart.yaml)
-          if ! oras manifest fetch "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${app_version}" > /dev/null; then
-            echo "Image tag '${app_version}' (chart appVersion) not found in ${REGISTRY_PROJECT} — merge the appVersion update PR first" >&2
-            exit 1
-          fi
-
-      - name: Check for already-published chart version
-        id: published
-        # Re-pushing a served chart version changes its digest and Artifact Hub
-        # cannot re-index it (docs/RELEASES.md invariant). Only a confirmed 404
-        # may take the push path: a transient fetch error must fail the job, not
-        # masquerade as "not published".
-        run: |
-          set -euo pipefail
-          ref="${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${CHART_VERSION}"
-          set +e
-          oras manifest fetch --descriptor "${ref}" > /dev/null 2>"${RUNNER_TEMP}/fetch-err"
-          rc=$?
-          set -e
-          if [ "${rc}" -eq 0 ]; then
-            echo "Chart version ${CHART_VERSION} already published — skipping push, repairing signature/metadata if needed."
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          elif grep -qiE 'not found|MANIFEST_UNKNOWN|NAME_UNKNOWN|404' "${RUNNER_TEMP}/fetch-err"; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          else
-            command cat "${RUNNER_TEMP}/fetch-err" >&2
-            echo "Could not determine whether ${ref} exists — refusing to push blindly" >&2
-            exit 1
-          fi
-
-      - name: Package chart
-        if: steps.published.outputs.exists == 'false'
-        run: task chart:package
-
-      - name: Push chart
-        if: steps.published.outputs.exists == 'false'
-        run: helm push "dist/helm-charts-oci-proxy-${CHART_VERSION}.tgz" "oci://${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}"
-
-      - name: Sign chart
-        # Unconditional so a re-run repairs a missed signature. Re-signing an
-        # already-signed digest appends a duplicate signature; harmless, and
-        # cheaper than probing the registry for one.
-        run: |
-          set -euo pipefail
-          digest=$(oras resolve "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${CHART_VERSION}")
-          cosign sign --yes "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy@${digest}"
-
-      - name: Push Artifact Hub repository metadata
-        # Unconditional: content-addressed, so re-pushing identical metadata is a
-        # no-op, and re-runs repair a metadata push that previously failed.
-        run: |
-          oras push "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:artifacthub.io" \
-            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
-            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
-
-      - name: Smoke test published chart
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/smoke"
-          helm pull "oci://${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy" --version "${CHART_VERSION}" -d "${RUNNER_TEMP}/smoke"
-          helm template "${RUNNER_TEMP}/smoke/helm-charts-oci-proxy-${CHART_VERSION}.tgz"
+          task chart:release \
+            CHART_VERSION="${CHART_VERSION}" \
+            REGISTRY_ADDRESS="${REGISTRY_ADDRESS}" \
+            REGISTRY_PROJECT="${REGISTRY_PROJECT}"
