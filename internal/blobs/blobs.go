@@ -19,7 +19,7 @@ import (
 
 // Blobs service
 type Blobs struct {
-	handler handler.BlobHandler `json:"blobHandler"`
+	handler handler.BlobHandler
 	// Each upload gets a unique id that writes occur to until finalized.
 	// Temporary storage
 	lock sync.Mutex

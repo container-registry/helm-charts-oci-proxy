@@ -1,2 +1,17 @@
 Dockerfile
 LICENSE
+.git
+.github
+.bin
+dist
+chart
+docs
+certs
+taskfiles
+Taskfile.yml
+*.md
+out.yaml
+prod-values.yaml
+artifacthub-repo.yml
+release-please-config.json
+.release-please-manifest.json

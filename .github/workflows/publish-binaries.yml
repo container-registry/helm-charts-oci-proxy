@@ -1,0 +1,39 @@
+name: Publish Binaries
+
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: Release tag to upload assets to
+        required: true
+        type: string
+      version:
+        description: Version to embed in the binaries
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          go: 'true'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build release binaries
+        env:
+          VERSION: ${{ inputs.version }}
+        run: task app:binaries VERSION="${VERSION}"
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: gh release upload "${TAG_NAME}" dist/*.tar.gz dist/checksums.txt --clobber --repo "${GITHUB_REPOSITORY}"

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'chart/**'
+      - 'docs/**'
+      - '**.md'
+      # Release PRs only touch these (CHANGELOG.md is covered by '**.md').
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'chart/**'
+      - 'docs/**'
+      - '**.md'
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          go: 'true'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Vet
+        run: task app:vet
+      - name: Test
+        run: task app:test
+      - name: Build
+        run: task app:build VERSION=ci-check
+      - name: Version sanity check
+        run: .bin/proxy version | grep -qx ci-check

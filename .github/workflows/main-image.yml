@@ -1,0 +1,38 @@
+name: Main Image
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'chart/**'
+      - 'docs/**'
+      - '**.md'
+      # Release PR merges only touch these; publish-image already builds the
+      # release commit as vX.Y.Z/latest, so a byte-identical `main` build is waste.
+      - '.release-please-manifest.json'
+      - 'release-please-config.json'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # No cancel-in-progress: cancelling a run mid docker-push can leave the
+  # rolling `main` tag partial. In-flight runs finish; GitHub keeps at most one
+  # pending run per group, so superseded queued commits may skip their main-<shortsha> image.
+  group: main-image-${{ github.ref }}
+
+jobs:
+  publish:
+    # workflow_dispatch from any other ref must not overwrite the rolling `main` tag.
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      checkout_ref: ${{ github.sha }}
+      image_tag: main
+      extra_tag: main-{shortsha}
+      registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
+      registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}

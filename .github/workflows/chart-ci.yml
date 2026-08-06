@@ -1,0 +1,57 @@
+name: Chart CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'chart/**'
+      - 'Taskfile.yml'
+      - 'taskfiles/chart.yml'
+      - '.github/workflows/chart-ci.yml'
+      - '.github/actions/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'chart/**'
+      - 'Taskfile.yml'
+      - 'taskfiles/chart.yml'
+      - '.github/workflows/chart-ci.yml'
+      - '.github/actions/**'
+
+permissions: {}
+
+concurrency:
+  group: chart-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up tools
+        uses: ./.github/actions/setup
+        with:
+          helm: 'true'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install helm-unittest plugin
+        # --verify=false: helm v4 requires it for plugins without provenance signatures.
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v1.1.2 --verify=false
+
+      - name: Lint chart
+        run: task chart:lint
+
+      - name: Render templates
+        run: task chart:template
+
+      - name: Run unit tests
+        run: task chart:unittest

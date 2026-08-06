@@ -1,94 +1,62 @@
-name: "Publish Chart"
+name: Publish Chart
+
 on:
-  workflow_dispatch:
-  pull_request:
-    paths:
-      - "chart/**"
-      - ".github/workflows/publish-chart.yml"
-  push:
-    paths:
-      - "chart/**"
-      - ".github/workflows/publish-chart.yml"
-    branches:
-      - main
+  workflow_call:
+    inputs:
+      chart_version:
+        description: Chart version to publish (must match chart/Chart.yaml at tag chart-v<version>)
+        type: string
+        required: true
+      registry_address:
+        description: OCI registry address
+        type: string
+        default: '8gears.container-registry.com'
+      registry_project:
+        description: Registry project (namespace) for the chart
+        type: string
+        default: 'library'
+
+permissions: {}
+
 jobs:
-  check-version-change:
+  publish:
     runs-on: ubuntu-latest
-    outputs:
-      should_publish: ${{ steps.check-version.outputs.changed == 'true' || steps.manual-flag.outputs.changed == 'true' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGISTRY_ADDRESS: ${{ inputs.registry_address }}
+      REGISTRY_PROJECT: ${{ inputs.registry_project }}
+      CHART_VERSION: ${{ inputs.chart_version }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
+          ref: chart-v${{ inputs.chart_version }}
+          persist-credentials: false
 
-      - name: Install yq
+      - name: Set up tools
+        uses: ./.github/actions/setup
+        with:
+          helm: 'true'
+          oras: 'true'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to registry via OIDC
+        uses: ./.github/actions/harbor-login
+        with:
+          registry_address: ${{ inputs.registry_address }}
+          # docker included so ~/.docker/config.json carries the credentials cosign reads.
+          clients: docker helm oras
+
+      - name: Publish, sign, and smoke test chart
+        # All logic lives in taskfiles/chart.yml so it can be run and tested
+        # locally (see chart:release and the PLAIN_HTTP/COSIGN_SIGN_FLAGS vars);
+        # this workflow only provides checkout, tools, and registry auth.
         run: |
-          sudo wget https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64 -O /usr/local/bin/yq
-          sudo chmod +x /usr/local/bin/yq
-
-      - name: Check if Chart Version Changed
-        id: check-version
-        if: github.event_name != 'workflow_dispatch'
-        run: |
-          # For PRs, compare against base branch; for pushes, compare against previous commit
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_REF="origin/${{ github.base_ref }}"
-          else
-            BASE_REF="HEAD^"
-          fi
-
-          if git diff --name-only "$BASE_REF" HEAD | grep -q 'chart/Chart.yaml'; then
-            # Check if Chart.yaml existed in base ref
-            if git cat-file -e "${BASE_REF}:chart/Chart.yaml" 2>/dev/null; then
-              PREVIOUS_VERSION=$(git show "${BASE_REF}:chart/Chart.yaml" | yq -r '.version')
-              CURRENT_VERSION=$(yq -r '.version' chart/Chart.yaml)
-              if [ "$PREVIOUS_VERSION" != "$CURRENT_VERSION" ]; then
-                echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
-                echo "changed=true" >> $GITHUB_OUTPUT
-              else
-                echo "Version didn't change ($CURRENT_VERSION)"
-                echo "changed=false" >> $GITHUB_OUTPUT
-              fi
-            else
-              echo "Chart.yaml is newly added, treating as version change"
-              echo "changed=true" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "Chart.yaml wasn't modified"
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Set Publish Flag for Manual Runs
-        if: github.event_name == 'workflow_dispatch'
-        id: manual-flag
-        run: echo "changed=true" >> $GITHUB_OUTPUT
-
-  publish-chart:
-    needs: check-version-change
-    if: needs.check-version-change.outputs.should_publish == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
-
-      - name: Install Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: v3.14.0
-
-      - name: Copy README.md to Chart Directory
-        run: cp README.md chart/README.md
-
-      - name: Create Chart Package
-        run: helm package chart -d ./tmp
-
-      - name: Login to Registry
-        run: echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ vars.REGISTRY_ADDR }} --username ${{ vars.REGISTRY_USERNAME }} --password-stdin
-
-      - name: Push Packaged Chart to Registry
-        run: helm push ./tmp/* oci://${{ vars.REGISTRY_ADDR }}/library
+          task chart:release \
+            CHART_VERSION="${CHART_VERSION}" \
+            REGISTRY_ADDRESS="${REGISTRY_ADDRESS}" \
+            REGISTRY_PROJECT="${REGISTRY_PROJECT}"

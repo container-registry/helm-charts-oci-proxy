@@ -1,0 +1,46 @@
+name: Harbor OIDC login
+description: Mint a GitHub OIDC token for Harbor and log the requested clients in (keyless, no stored credentials)
+
+inputs:
+  registry_address:
+    description: Harbor registry host
+    required: true
+  clients:
+    description: Space-separated clients to log in (docker, helm, oras)
+    required: false
+    default: docker
+
+runs:
+  using: composite
+  steps:
+    - name: Mint OIDC token for Harbor
+      id: oidc
+      shell: bash
+      env:
+        AUDIENCE: https://${{ inputs.registry_address }}
+      run: |
+        set -euo pipefail
+        response=$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}")
+        token=$(jq -r '.value' <<<"${response}")
+        [ -n "${token}" ] && [ "${token}" != "null" ] || { echo "OIDC token mint failed" >&2; exit 1; }
+        echo "::add-mask::${token}"
+        echo "token=${token}" >> "$GITHUB_OUTPUT"
+
+    - name: Log in
+      shell: bash
+      env:
+        REGISTRY_ADDRESS: ${{ inputs.registry_address }}
+        CLIENTS: ${{ inputs.clients }}
+        TOKEN: ${{ steps.oidc.outputs.token }}
+      run: |
+        set -euo pipefail
+        # Username is ignored; Harbor maps the JWT to a federated robot via claim rules.
+        for client in ${CLIENTS}; do
+          case "${client}" in
+            docker) docker login "${REGISTRY_ADDRESS}" --username jwt --password-stdin <<< "${TOKEN}" ;;
+            helm) helm registry login "${REGISTRY_ADDRESS}" --username jwt --password-stdin <<< "${TOKEN}" ;;
+            oras) oras login "${REGISTRY_ADDRESS}" --username jwt --password-stdin <<< "${TOKEN}" ;;
+            *) echo "Unknown client '${client}'" >&2; exit 1 ;;
+          esac
+        done

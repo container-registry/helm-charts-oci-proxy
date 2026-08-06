@@ -16,9 +16,9 @@ type Registry struct {
 	log logrus.StdLogger
 
 	// to operate blobs directly from registry
-	blobs Handler `json:"blobs"`
+	blobs Handler
 	//
-	manifests Handler `json:"manifests"`
+	manifests Handler
 	tags      Handler
 	catalog   Handler
 
