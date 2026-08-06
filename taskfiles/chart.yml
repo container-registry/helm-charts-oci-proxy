@@ -1,0 +1,28 @@
+version: '3'
+
+tasks:
+  lint:
+    desc: Lint the Helm chart (strict)
+    cmds:
+      - helm lint ./chart --strict
+
+  template:
+    desc: Render the Helm chart templates
+    cmds:
+      - helm template ./chart
+
+  unittest:
+    desc: Run helm-unittest suites (requires the helm-unittest plugin)
+    cmds:
+      - helm unittest ./chart
+
+  package:
+    desc: Package the chart into dist/
+    cmds:
+      - mkdir -p dist
+      - helm package chart -d dist
+
+  deploy-staging:
+    desc: Deploy the chart to the ocip-staging namespace
+    cmds:
+      - helm upgrade -i --namespace ocip-staging --create-namespace ocip-staging ./chart

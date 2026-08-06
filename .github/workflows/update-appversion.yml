@@ -1,0 +1,60 @@
+name: Update Chart appVersion
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Released app version, v-prefixed (e.g. v1.0.0)
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: update-appversion
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Update appVersion
+        id: bump
+        run: |
+          set -euo pipefail
+          # yq (mikefarah v4) is preinstalled on ubuntu-latest runners.
+          current=$(yq -r '.appVersion' chart/Chart.yaml)
+          if [ "${current}" = "${VERSION}" ]; then
+            echo "appVersion already ${VERSION}, nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # style="double" keeps appVersion a quoted string, as Helm expects.
+          VERSION="${VERSION}" yq -i '.appVersion = (strenv(VERSION) | . style="double")' chart/Chart.yaml
+          [ "$(yq -r '.appVersion' chart/Chart.yaml)" = "${VERSION}" ]
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        if: steps.bump.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          # A PAT lets the bot PR trigger chart CI; github.token PRs don't trigger workflows.
+          token: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
+          branch: bot/update-appversion
+          delete-branch: true
+          commit-message: 'fix(chart): update appVersion to ${{ inputs.version }}'
+          title: 'fix(chart): update appVersion to ${{ inputs.version }}'
+          body: |
+            Updates `appVersion` in `chart/Chart.yaml` to `${{ inputs.version }}` so the chart's
+            default image tag points at the freshly released container image.
+
+            Automated by the release workflow after the image was published.

@@ -64,13 +64,13 @@ Our Helm Charts are only available as OCI artifacts. Unlike with traditional Cha
 need to add a Repo first. With OCI, you can install the Chart with one command.
 
 ```bash
-helm install chartproxy --version 1.0.0 --create-namespace --namespace chartproxy oci://8gears.container-registry.com/library/helm-charts-oci-proxy 
+helm install chartproxy --create-namespace --namespace chartproxy oci://8gears.container-registry.com/library/helm-charts-oci-proxy
 ```
 
 Use `helm pull` to only pull the chart to your local disc, without installing.
 
 ```bash
-helm pull oci://8gears.container-registry.com/library/helm-charts-oci-proxy --version 1.0.0
+helm pull oci://8gears.container-registry.com/library/helm-charts-oci-proxy
 ```
 
 ### Installation outside Kubernetes
