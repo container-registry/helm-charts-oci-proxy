@@ -104,15 +104,16 @@ jobs:
             --provenance=false \
             --sbom=false \
             --build-arg VERSION="${VERSION}" \
+            --metadata-file /tmp/build-metadata.json \
             "${tags[@]}" \
             .
       - name: Capture digest
         id: digest
-        env:
-          IMAGE_TAG: ${{ inputs.image_tag }}
+        # From the build metadata, not a tag re-read: a concurrent push to the
+        # same tag must not change which digest gets signed/reported.
         run: |
           set -euo pipefail
-          digest=$(docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{.Manifest.Digest}}')
+          digest=$(jq -r '."containerimage.digest"' /tmp/build-metadata.json)
           if ! grep -Eq '^sha256:[0-9a-f]{64}$' <<<"${digest}"; then
             echo "Invalid digest: ${digest}" >&2
             exit 1

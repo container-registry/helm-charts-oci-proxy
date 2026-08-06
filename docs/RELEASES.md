@@ -83,8 +83,8 @@ federated robot account via a claim rule on `repository == container-registry/he
 2. **GitHub repo settings**: squash merge only (default message: PR title); Settings →
    Actions → General → "Allow GitHub Actions to create and approve pull requests" enabled.
 3. **GitHub variables**: `REGISTRY_ADDRESS` (optional, default `8gears.container-registry.com`),
-   `REGISTRY_PROJECT` (optional, default `library`), `PR_REGISTRY_PROJECT` (required for PR
-   preview images). The legacy `REGISTRY_ADDR`/`REGISTRY_USERNAME`/`REGISTRY_PASSWORD` are unused.
+   `REGISTRY_PROJECT` (optional, default `library`), `PR_REGISTRY_PROJECT` (optional, default
+   `library-dev`). The legacy `REGISTRY_ADDR`/`REGISTRY_USERNAME`/`REGISTRY_PASSWORD` are unused.
 4. If branch protection ever requires status checks, release-please's PRs need a PAT
    (`GITHUB_TOKEN`-created PRs don't trigger CI) — pass it as `token` to the release-please
    action and to `peter-evans/create-pull-request` in `update-appversion.yml`.

@@ -72,6 +72,18 @@ jobs:
           helm registry login "${REGISTRY_ADDRESS}" --username jwt --password-stdin <<< "${token}"
           oras login "${REGISTRY_ADDRESS}" --username jwt --password-stdin <<< "${token}"
 
+      - name: Assert appVersion image exists
+        # The chart's default image ref is <repository>:<appVersion>. Enforces the
+        # "merge the appVersion PR before the chart release PR" rule from
+        # docs/RELEASES.md instead of trusting it.
+        run: |
+          set -euo pipefail
+          app_version=$(yq -r '.appVersion' chart/Chart.yaml)
+          if ! oras manifest fetch "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${app_version}" > /dev/null; then
+            echo "Image tag '${app_version}' (chart appVersion) not found in ${REGISTRY_PROJECT} — merge the appVersion update PR first" >&2
+            exit 1
+          fi
+
       - name: Package chart
         run: task chart:package
 

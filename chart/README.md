@@ -1,6 +1,6 @@
 # Helm Chart OCI Proxy
 
-Helm Chart OCI Proxy transparently proxies and transforms traditional Chart Repository styled Helm Charts into OCI artifacts. It lets you address any public Chart Repository Helm Chart as an OCI image, e.g. `helm pull oci://chartproxy.container-registry.com/charts.jetstack.io/cert-manager`. This is particularly useful since Harbor 2.8 removed support for the older Chart Repository format.
+Helm Chart OCI Proxy transparently proxies and transforms traditional Chart Repository-styled Helm Charts into OCI artifacts. It lets you address any public Chart Repository Helm Chart as an OCI image, e.g. `helm pull oci://chartproxy.container-registry.com/charts.jetstack.io/cert-manager`. This is particularly useful since Harbor 2.8 removed support for the older Chart Repository format.
 
 Source and documentation: [github.com/container-registry/helm-charts-oci-proxy](https://github.com/container-registry/helm-charts-oci-proxy)
 
