@@ -14,11 +14,12 @@ sources:
   - https://github.com/container-registry/helm-charts-oci-proxy
 maintainers:
   - name: 8gears Container Registry
+    email: vad1mo@8gears.com
 
 annotations:
-  artifacthub.io/changes: |
-    - kind: changed
-      description: "Replace deprecated Horizontal Pod Autoscaler version v2beta1 with v2. Requires Kubernetes v1.23+."
-      links:
-        - name: GitHub PR
-          url: https://github.com/container-registry/helm-charts-oci-proxy/pull/12
+  artifacthub.io/license: AGPL-3.0-only
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/container-registry/helm-charts-oci-proxy
+    - name: Support
+      url: https://github.com/container-registry/helm-charts-oci-proxy/issues
