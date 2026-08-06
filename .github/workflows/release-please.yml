@@ -28,7 +28,9 @@ jobs:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # RELEASE_BOT_TOKEN (optional PAT) lets release PRs trigger CI;
+          # GITHUB_TOKEN-created PRs don't (GitHub anti-recursion).
+          token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -69,6 +71,7 @@ jobs:
     uses: ./.github/workflows/update-appversion.yml
     with:
       version: ${{ needs.release-please.outputs.app_tag_name }}
+    secrets: inherit
 
   publish-chart:
     needs: release-please
