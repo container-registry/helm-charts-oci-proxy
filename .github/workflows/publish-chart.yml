@@ -83,14 +83,12 @@ jobs:
           set -euo pipefail
           ref="${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${CHART_VERSION}"
           set +e
-          descriptor=$(oras manifest fetch --descriptor "${ref}" 2>"${RUNNER_TEMP}/fetch-err")
+          oras manifest fetch --descriptor "${ref}" > /dev/null 2>"${RUNNER_TEMP}/fetch-err"
           rc=$?
           set -e
           if [ "${rc}" -eq 0 ]; then
-            digest=$(jq -r '.digest' <<<"${descriptor}")
-            echo "Chart version ${CHART_VERSION} already published (${digest}) — skipping push, repairing signature/metadata if needed."
+            echo "Chart version ${CHART_VERSION} already published — skipping push, repairing signature/metadata if needed."
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           elif grep -qiE 'not found|MANIFEST_UNKNOWN|NAME_UNKNOWN|404' "${RUNNER_TEMP}/fetch-err"; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
           else
@@ -105,39 +103,16 @@ jobs:
 
       - name: Push chart
         if: steps.published.outputs.exists == 'false'
-        id: push
-        run: |
-          set -euo pipefail
-          output=$(helm push "dist/helm-charts-oci-proxy-${CHART_VERSION}.tgz" "oci://${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}" 2>&1)
-          printf '%s\n' "${output}"
-          digest=$(sed -n 's/^Digest: //p' <<<"${output}")
-          if ! grep -Eq '^sha256:[0-9a-f]{64}$' <<<"${digest}"; then
-            echo "Could not parse chart digest from helm push output" >&2
-            exit 1
-          fi
-          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+        run: helm push "dist/helm-charts-oci-proxy-${CHART_VERSION}.tgz" "oci://${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}"
 
       - name: Sign chart
-        # Runs on re-runs too: a previous run may have pushed the chart and died
-        # before signing. Skips only when the signature already exists.
-        env:
-          DIGEST: ${{ steps.push.outputs.digest || steps.published.outputs.digest }}
+        # Unconditional so a re-run repairs a missed signature. Re-signing an
+        # already-signed digest appends a duplicate signature; harmless, and
+        # cheaper than probing the registry for one.
         run: |
           set -euo pipefail
-          sig_ref="${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:sha256-${DIGEST#sha256:}.sig"
-          set +e
-          oras manifest fetch --descriptor "${sig_ref}" > /dev/null 2>"${RUNNER_TEMP}/sig-err"
-          rc=$?
-          set -e
-          if [ "${rc}" -eq 0 ]; then
-            echo "Signature for ${DIGEST} already present, skipping."
-          elif grep -qiE 'not found|MANIFEST_UNKNOWN|NAME_UNKNOWN|404' "${RUNNER_TEMP}/sig-err"; then
-            cosign sign --yes "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy@${DIGEST}"
-          else
-            command cat "${RUNNER_TEMP}/sig-err" >&2
-            echo "Could not determine whether ${sig_ref} exists" >&2
-            exit 1
-          fi
+          digest=$(oras resolve "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy:${CHART_VERSION}")
+          cosign sign --yes "${REGISTRY_ADDRESS}/${REGISTRY_PROJECT}/helm-charts-oci-proxy@${digest}"
 
       - name: Push Artifact Hub repository metadata
         # Unconditional: content-addressed, so re-pushing identical metadata is a
