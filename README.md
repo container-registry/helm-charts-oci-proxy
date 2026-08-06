@@ -84,15 +84,15 @@ docker pull 8gears.container-registry.com/library/helm-charts-oci-proxy
 
 ## Development
 
-Build the binary
+Build the binary (requires [Task](https://taskfile.dev))
 
 ```shell  
-./do.sh build
+task app:build
 ```  
 
 ### Run Locally
 ```shell  
-./do.sh run
+task app:run
 ```  
 
 ### Run Tests
