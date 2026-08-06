@@ -14,7 +14,6 @@ sources:
   - https://github.com/container-registry/helm-charts-oci-proxy
 maintainers:
   - name: 8gears Container Registry
-    email: vad1mo@8gears.com
 
 annotations:
   artifacthub.io/license: AGPL-3.0-only
