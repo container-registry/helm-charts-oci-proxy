@@ -14,7 +14,8 @@ permissions: {}
 
 concurrency:
   # No cancel-in-progress: cancelling a run mid docker-push can leave the
-  # rolling `main` tag partial and drops main-<shortsha> images; runs queue instead.
+  # rolling `main` tag partial. In-flight runs finish; GitHub keeps at most one
+  # pending run per group, so superseded queued commits may skip their main-<shortsha> image.
   group: main-image-${{ github.ref }}
 
 jobs:

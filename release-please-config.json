@@ -21,7 +21,7 @@
       "include-component-in-tag": false,
       "include-v-in-tag": true,
       "release-as": "1.0.0",
-      "exclude-paths": ["chart", ".github", "docs"]
+      "exclude-paths": ["chart", ".github", "docs", "artifacthub-repo.yml"]
     },
     "chart": {
       "release-type": "helm",
