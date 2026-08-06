@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'chart/**'
+      - 'docs/**'
+      - '**.md'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'chart/**'
+      - 'docs/**'
+      - '**.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+      - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Vet
+        run: task app:vet
+      - name: Test
+        run: task app:test
+      - name: Build
+        run: task app:build
+      - name: Version sanity check
+        run: .bin/proxy version

@@ -1,0 +1,151 @@
+name: Publish Image
+
+on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Git ref to build from
+        required: true
+        type: string
+      image_tag:
+        description: Primary image tag
+        required: true
+        type: string
+      extra_tag:
+        description: Optional additional image tag
+        required: false
+        type: string
+        default: ''
+      version:
+        description: Version to embed; derived via git describe when empty
+        required: false
+        type: string
+        default: ''
+      registry_address:
+        description: Registry host
+        required: false
+        type: string
+        default: 8gears.container-registry.com
+      registry_project:
+        description: Registry project
+        required: false
+        type: string
+        default: library
+    outputs:
+      digest:
+        description: Digest of the pushed multi-arch image
+        value: ${{ jobs.build.outputs.digest }}
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    env:
+      IMAGE: ${{ inputs.registry_address }}/${{ inputs.registry_project }}/helm-charts-oci-proxy
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve version
+        id: version
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${VERSION_INPUT}" ]; then
+            version="${VERSION_INPUT}"
+          else
+            version=$(git describe --tags --always)
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Mint OIDC token for Harbor
+        id: harbor-oidc
+        env:
+          AUDIENCE: https://${{ inputs.registry_address }}
+        run: |
+          response=$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}")
+          token=$(jq -r '.value' <<<"${response}")
+          echo "::add-mask::${token}"
+          echo "token=${token}" >> "$GITHUB_OUTPUT"
+      - name: Log in to registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ inputs.registry_address }}
+          # Keyless: the username is ignored, the OIDC JWT is the password
+          username: jwt
+          password: ${{ steps.harbor-oidc.outputs.token }}
+      - name: Build and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          EXTRA_TAG: ${{ inputs.extra_tag }}
+        run: |
+          set -euo pipefail
+          tags=(-t "${IMAGE}:${IMAGE_TAG}")
+          if [ -n "${EXTRA_TAG}" ]; then
+            tags+=(-t "${IMAGE}:${EXTRA_TAG}")
+          fi
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --push \
+            --build-arg VERSION="${VERSION}" \
+            "${tags[@]}" \
+            .
+      - name: Capture digest
+        id: digest
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          digest=$(docker buildx imagetools inspect "${IMAGE}:${IMAGE_TAG}" --format '{{.Manifest.Digest}}')
+          if ! grep -Eq '^sha256:[0-9a-f]{64}$' <<<"${digest}"; then
+            echo "Invalid digest: ${digest}" >&2
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    env:
+      IMAGE: ${{ inputs.registry_address }}/${{ inputs.registry_project }}/helm-charts-oci-proxy
+      DIGEST: ${{ needs.build.outputs.digest }}
+    steps:
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - name: Mint OIDC token for Harbor
+        id: harbor-oidc
+        env:
+          AUDIENCE: https://${{ inputs.registry_address }}
+        run: |
+          response=$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}")
+          token=$(jq -r '.value' <<<"${response}")
+          echo "::add-mask::${token}"
+          echo "token=${token}" >> "$GITHUB_OUTPUT"
+      - name: Log in to registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ inputs.registry_address }}
+          # Keyless: the username is ignored, the OIDC JWT is the password
+          username: jwt
+          password: ${{ steps.harbor-oidc.outputs.token }}
+      - name: Sign image
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+      - name: Generate SBOM
+        run: syft "${IMAGE}@${DIGEST}" -o spdx-json > sbom.spdx.json
+      - name: Attest SBOM
+        run: cosign attest --yes --type spdxjson --predicate sbom.spdx.json "${IMAGE}@${DIGEST}"

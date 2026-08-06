@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"github.com/container-registry/helm-charts-oci-proxy/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -23,12 +24,25 @@ var Root = New("ocip", "start registry service")
 func New(use, short string) *cobra.Command {
 
 	root := &cobra.Command{
-		Use:   use,
-		Short: short,
-		RunE:  func(cmd *cobra.Command, _ []string) error { return cmd.Usage() },
+		Use:     use,
+		Short:   short,
+		Version: version.Version,
+		RunE:    func(cmd *cobra.Command, _ []string) error { return cmd.Usage() },
 	}
 	root.AddCommand(
 		newCmdRegistry(),
+		newCmdVersion(),
 	)
 	return root
+}
+
+func newCmdVersion() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the version",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, _ []string) {
+			cmd.Println(version.Version)
+		},
+	}
 }

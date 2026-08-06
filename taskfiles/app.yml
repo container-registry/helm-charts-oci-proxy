@@ -1,0 +1,52 @@
+version: '3'
+
+vars:
+  MODULE: github.com/container-registry/helm-charts-oci-proxy
+
+tasks:
+  build:
+    desc: Build the proxy binary to .bin/proxy
+    vars:
+      VERSION: '{{default "dev" .VERSION}}'
+    cmds:
+      - CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X {{.MODULE}}/internal/version.Version={{.VERSION}}" -o .bin/proxy .
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  run:
+    desc: Build and run the proxy locally with TLS and debug enabled
+    cmds:
+      - task: build
+      - USE_TLS=1 DEBUG=1 .bin/proxy registry serve
+
+  binaries:
+    desc: Cross-compile release binaries into dist/ with checksums
+    vars:
+      VERSION: '{{default "dev" .VERSION}}'
+    cmds:
+      - rm -rf dist && mkdir -p dist
+      - for:
+          matrix:
+            OS: [linux, darwin]
+            ARCH: [amd64, arm64]
+        cmd: CGO_ENABLED=0 GOOS={{.ITEM.OS}} GOARCH={{.ITEM.ARCH}} go build -trimpath -ldflags "-s -w -X {{.MODULE}}/internal/version.Version={{.VERSION}}" -o .bin/{{.ITEM.OS}}-{{.ITEM.ARCH}}/proxy .
+      - for:
+          matrix:
+            OS: [linux, darwin]
+            ARCH: [amd64, arm64]
+        cmd: tar -czf dist/helm-charts-oci-proxy_{{.ITEM.OS}}-{{.ITEM.ARCH}}.tar.gz -C .bin/{{.ITEM.OS}}-{{.ITEM.ARCH}} proxy
+      - |
+        cd dist
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum *.tar.gz > checksums.txt
+        else
+          shasum -a 256 *.tar.gz > checksums.txt
+        fi
