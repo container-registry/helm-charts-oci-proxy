@@ -20,6 +20,8 @@ on:
       - '**.md'
       - '.release-please-manifest.json'
       - 'release-please-config.json'
+  # Escape hatch: lets a wedged or never-spawned push run be replaced manually.
+  workflow_dispatch:
 
 permissions:
   contents: read
