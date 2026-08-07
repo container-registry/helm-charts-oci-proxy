@@ -1,0 +1,68 @@
+name: Dispatch Publish
+
+# Manual re-publish escape hatch: runs the same reusable publish workflows the
+# release-please chain uses, for a release that already has its tag (e.g. when
+# an Actions outage swallowed the original run). Publishing is idempotent:
+# publish-chart skips existing versions and repairs signatures/metadata.
+on:
+  workflow_dispatch:
+    inputs:
+      app_tag:
+        description: App release tag to publish (e.g. v1.0.0); empty to skip
+        type: string
+        default: ''
+      chart_version:
+        description: Chart version to publish (e.g. 1.3.0, tag chart-v<version> must exist); empty to skip
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: release-please-${{ github.ref }}
+
+jobs:
+  publish-image:
+    if: inputs.app_tag != ''
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-image.yml
+    with:
+      checkout_ref: ${{ inputs.app_tag }}
+      image_tag: ${{ inputs.app_tag }}
+      extra_tag: latest
+      registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
+      registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}
+
+  publish-binaries:
+    if: inputs.app_tag != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/publish-binaries.yml
+    with:
+      tag_name: ${{ inputs.app_tag }}
+      version: ${{ inputs.app_tag }}
+
+  update-appversion:
+    needs: publish-image
+    if: inputs.app_tag != ''
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/update-appversion.yml
+    with:
+      version: ${{ inputs.app_tag }}
+    secrets:
+      RELEASE_BOT_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+
+  publish-chart:
+    if: inputs.chart_version != ''
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-chart.yml
+    with:
+      chart_version: ${{ inputs.chart_version }}
+      registry_address: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
+      registry_project: ${{ vars.REGISTRY_PROJECT || 'library' }}
