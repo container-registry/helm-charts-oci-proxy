@@ -1,0 +1,8 @@
+# Configuration for the dco2 GitHub App (https://github.com/apps/dco2).
+# The app is what enforces sign-off on pull requests; the lefthook hook and
+# `task dco-check` are the local mirror of it.
+allowRemediationCommits:
+  # Lets a contributor add a missing sign-off with an extra commit instead of
+  # rewriting their branch. Much less painful for first-time contributors.
+  individual: true
+  thirdParty: false
