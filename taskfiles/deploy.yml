@@ -1,0 +1,123 @@
+version: '3'
+
+vars:
+  REGISTRY_ADDRESS: '{{.REGISTRY_ADDRESS | default "8gears.container-registry.com"}}'
+  REGISTRY_PROJECT: '{{.REGISTRY_PROJECT | default "library"}}'
+  DEPLOY_NAME: helm-charts-oci-proxy-deploy
+  DEPLOY_REPO: '{{.REGISTRY_ADDRESS}}/{{.REGISTRY_PROJECT}}/{{.DEPLOY_NAME}}'
+  DEPLOY_TAG: '{{.DEPLOY_TAG | default "prod"}}'
+  # Flux artifact media types; source-controller untars the first layer.
+  FLUX_CONFIG_MEDIA_TYPE: application/vnd.cncf.flux.config.v1+json
+  FLUX_LAYER_MEDIA_TYPE: application/vnd.cncf.flux.content.v1.tar+gzip
+  COSIGN_SIGN_FLAGS: '{{.COSIGN_SIGN_FLAGS | default "--yes"}}'
+  PLAIN_HTTP: '{{.PLAIN_HTTP | default "false"}}'
+  ORAS_FLAGS: '{{if eq .PLAIN_HTTP "true"}}--plain-http{{end}}'
+
+tasks:
+  build:
+    desc: Render the prod overlay (what gets published as the OCI artifact)
+    cmds:
+      - kubectl kustomize deploy/prod
+      - kubectl kustomize deploy/bootstrap
+
+  template:
+    desc: Render the chart with the prod HelmRelease values (offline sanity check)
+    cmds:
+      - |
+        set -euo pipefail
+        tmp=$(mktemp -d)
+        trap 'rm -rf "${tmp}"' EXIT
+        yq -r '.spec.values' deploy/prod/helmrelease.yaml > "${tmp}/values.yaml"
+        version=$(yq -r '.spec.ref.semver' deploy/prod/chart-ocirepository.yaml)
+        helm template chartproxy \
+          "oci://{{.REGISTRY_ADDRESS}}/{{.REGISTRY_PROJECT}}/helm-charts-oci-proxy" \
+          --version "${version}" \
+          --namespace chartproxy \
+          --values "${tmp}/values.yaml"
+
+  publish:
+    desc: Package deploy/prod and push it as an OCI artifact (tags prod + sha-<commit>)
+    vars:
+      GIT_SHA:
+        sh: git rev-parse --short HEAD
+    cmds:
+      - |
+        set -euo pipefail
+        tmp=$(mktemp -d)
+        trap 'rm -rf "${tmp}"' EXIT
+        # Layer content is the overlay root, so the Flux Kustomization path is "./".
+        tar -czf "${tmp}/deploy.tar.gz" -C deploy/prod .
+        # Harbor 500s on a zero-byte config blob for this media type; "{}" is
+        # what the flux CLI writes and what Harbor's artifact processor accepts.
+        printf '{}' > "${tmp}/config.json"
+        # Pushed from inside the temp dir: oras rejects absolute file paths.
+        cd "${tmp}"
+        oras push {{.ORAS_FLAGS}} \
+          --config config.json:{{.FLUX_CONFIG_MEDIA_TYPE}} \
+          --annotation "org.opencontainers.image.source=https://github.com/container-registry/helm-charts-oci-proxy" \
+          --annotation "org.opencontainers.image.revision={{.GIT_SHA}}" \
+          "{{.DEPLOY_REPO}}:{{.DEPLOY_TAG}},sha-{{.GIT_SHA}}" \
+          "deploy.tar.gz:{{.FLUX_LAYER_MEDIA_TYPE}}"
+
+  sign:
+    desc: Cosign-sign the published deploy artifact by digest (keyless by default)
+    cmds:
+      - |
+        set -euo pipefail
+        digest=$(oras resolve {{.ORAS_FLAGS}} "{{.DEPLOY_REPO}}:{{.DEPLOY_TAG}}")
+        cosign sign {{.COSIGN_SIGN_FLAGS}} "{{.DEPLOY_REPO}}@${digest}"
+
+  release:
+    desc: Publish and sign the deploy artifact
+    cmds:
+      - task: publish
+      - task: sign
+
+  bootstrap:
+    desc: Point the target cluster's Flux at the deploy artifact (KUBECONFIG must be set)
+    preconditions:
+      # Never guess a cluster: a default kubeconfig path would silently target
+      # whatever the shell happens to point at.
+      - sh: test -n "${KUBECONFIG:-}"
+        msg: Set KUBECONFIG to the target cluster explicitly.
+    cmds:
+      - |
+        set -euo pipefail
+        echo "Target: $(kubectl config current-context)"
+        # Flux itself is the cluster's business; this only checks that the APIs
+        # the manifests use are served.
+        kubectl get crd \
+          ocirepositories.source.toolkit.fluxcd.io \
+          kustomizations.kustomize.toolkit.fluxcd.io \
+          helmreleases.helm.toolkit.fluxcd.io >/dev/null
+        kubectl apply -k deploy/bootstrap
+        kubectl -n flux-system wait ocirepository/chartproxy-prod --for=condition=Ready --timeout=3m
+        kubectl -n flux-system wait kustomization/chartproxy-prod --for=condition=Ready --timeout=5m
+
+  status:
+    desc: Show the Flux and workload status of the prod deployment (KUBECONFIG must be set)
+    preconditions:
+      - sh: test -n "${KUBECONFIG:-}"
+        msg: Set KUBECONFIG to the target cluster explicitly.
+    cmds:
+      - |
+        set -euo pipefail
+        kubectl -n flux-system get ocirepository/chartproxy-prod kustomization/chartproxy-prod
+        kubectl -n chartproxy get ocirepository,helmrelease,deploy,pod,ing,certificate 2>/dev/null
+
+  verify:
+    desc: Probe the deployment through the ingress by IP, bypassing public DNS
+    requires:
+      vars: [INGRESS_IP]
+    cmds:
+      - |
+        set -euo pipefail
+        host=$(yq -r '.spec.values.ingress.hosts[0].host' deploy/prod/helmrelease.yaml)
+        echo "Resolving ${host} to {{.INGRESS_IP}}"
+        curl -fsS --resolve "${host}:443:{{.INGRESS_IP}}" "https://${host}/api/version"
+        echo
+        # Captured instead of piped into head: with pipefail, curl exits 23 as
+        # soon as head closes the pipe on a response longer than the cut.
+        tags=$(curl -fsS --resolve "${host}:443:{{.INGRESS_IP}}" \
+          "https://${host}/v2/charts.jetstack.io/cert-manager/tags/list")
+        printf '%s\n' "${tags:0:400}"

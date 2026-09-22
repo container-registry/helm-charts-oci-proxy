@@ -1,0 +1,17 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: chartproxy-prod
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: oci://8gears.container-registry.com/library/helm-charts-oci-proxy-deploy
+  ref:
+    tag: prod
+  # The prod tag is mutable, so the artifact must prove it was signed by
+  # publish-deploy.yml on main. Both fields are regular expressions.
+  verify:
+    provider: cosign
+    matchOIDCIdentity:
+      - issuer: ^https://token\.actions\.githubusercontent\.com$
+        subject: ^https://github\.com/container-registry/helm-charts-oci-proxy/\.github/workflows/publish-deploy\.yml@refs/heads/main$

@@ -1,0 +1,90 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: chartproxy
+  namespace: chartproxy
+spec:
+  interval: 10m
+  releaseName: chartproxy
+  chartRef:
+    kind: OCIRepository
+    name: helm-charts-oci-proxy
+  install:
+    crds: Create
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    cleanupOnFail: true
+    remediation:
+      retries: 3
+      remediateLastFailure: true
+  values:
+    # Single replica and Recreate on purpose: blobs live in a per-pod in-memory
+    # store (cmd/serve.go, mem.NewMemHandler), so any second pod, including the
+    # surge pod of a RollingUpdate, answers 404 for blobs whose manifest the
+    # other pod served. Verified against a running deployment: 3 of 3 cold
+    # charts failed with 2 replicas. The cost is a few seconds of downtime per
+    # chart upgrade.
+    replicaCount: 1
+    deploymentStrategy:
+      type: Recreate
+
+    image:
+      pullPolicy: IfNotPresent
+
+    service:
+      type: ClusterIP
+      port: 9000
+
+    ingress:
+      enabled: true
+      className: nginx
+      annotations:
+        # DNS holdback: external-dns (ingress source, upsert-only) publishes the
+        # record for this host the moment it sees the Ingress. Any value other
+        # than "dns-controller" makes it skip (source/ingress.go). Removing this
+        # annotation IS the production cutover from the current deployment.
+        external-dns.alpha.kubernetes.io/controller: none
+        # The chart still ships the pre-1.18 class annotation by default, and the
+        # API server rejects an Ingress that carries both it and className.
+        kubernetes.io/ingress.class: null
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        nginx.ingress.kubernetes.io/proxy-buffering: "off"
+        nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+      hosts:
+        - host: chartproxy.container-registry.com
+          paths:
+            - path: /
+              pathType: Prefix
+      tls:
+        - secretName: chartproxy-tls
+          hosts:
+            - chartproxy.container-registry.com
+
+    resources:
+      limits:
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+    # Blobs never leave memory (see replicaCount), so the chart's volume is
+    # unused and the cluster needs no StorageClass.
+    persistence:
+      enabled: false
+
+    autoscaling:
+      enabled: false
+
+    app:
+      env_vars:
+        DEBUG: false
+        USE_TLS: false
+        MANIFEST_CACHE_TTL: 60
+        INDEX_CACHE_TTL: 14400
+        INDEX_ERROR_CACHE_TTL: 30
+        REWRITE_DEPENDENCIES: false
+        PROXY_HOST: ""

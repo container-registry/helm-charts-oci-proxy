@@ -7,6 +7,8 @@ includes:
     taskfile: taskfiles/app.yml
   chart:
     taskfile: taskfiles/chart.yml
+  deploy:
+    taskfile: taskfiles/deploy.yml
 
 tasks:
   default:
