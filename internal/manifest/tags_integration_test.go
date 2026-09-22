@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,12 @@ func TestHandleTags_PrereleaseOnlyChart_Integration(t *testing.T) {
 	}
 	if len(got.Tags) == 0 {
 		t.Fatal("expected at least one tag")
+	}
+	// A single stable version would make this chart pass even without the fix.
+	for _, tag := range got.Tags {
+		if !strings.Contains(tag, "-") {
+			t.Errorf("expected prerelease-only chart, got stable tag %q", tag)
+		}
 	}
 	for _, want := range []string{"0.0.1-edge", "0.0.9-edge"} {
 		var found bool

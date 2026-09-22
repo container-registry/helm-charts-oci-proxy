@@ -256,6 +256,14 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 		//reverse
 		return i > j
 	})
+	// /v2/tags/list passes the len(elem) check above but yields no parts at all.
+	if len(repoParts) < 2 {
+		return &errors.RegError{
+			Status:  http.StatusBadRequest,
+			Code:    "INVALID PARAMS",
+			Message: "No chart name specified",
+		}
+	}
 	fullRepo := strings.Join(repoParts, "/")
 
 	if req.Method != "GET" {
