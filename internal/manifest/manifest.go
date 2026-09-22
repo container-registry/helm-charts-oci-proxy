@@ -7,11 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"sort"
@@ -19,6 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/sirupsen/logrus"
 )
 
 type Catalog struct {
@@ -255,6 +256,14 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 		//reverse
 		return i > j
 	})
+	// /v2/tags/list passes the len(elem) check above but yields no parts at all.
+	if len(repoParts) < 2 {
+		return &errors.RegError{
+			Status:  http.StatusBadRequest,
+			Code:    "INVALID PARAMS",
+			Message: "No chart name specified",
+		}
+	}
 	fullRepo := strings.Join(repoParts, "/")
 
 	if req.Method != "GET" {
@@ -270,27 +279,32 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	// Determine rewrite options from config and query params
 	rewriteOpts := m.getRewriteOptions(req)
 
-	c, ok := m.manifests[fullRepo]
-	if !ok {
-		err := m.prepareChart(req.Context(), fullRepo, "", rewriteOpts)
-		if err != nil {
-			return err
-		}
-		c, _ = m.manifests[fullRepo]
-	}
-
 	repoPath := strings.Join(repoParts[:len(repoParts)-1], "/")
+	chartName := repoParts[len(repoParts)-1]
+
 	var tags []string
+	var fromIndex bool
 
-	index, _ := m.GetIndex(repoPath)
-
-	if index != nil {
-		if versions, ok := index.Entries[repoParts[len(repoParts)-1]]; ok {
+	// The tag list is derived from the repository index alone. Downloading a chart
+	// is not required here and must not make this endpoint fail, otherwise a single
+	// unresolvable chart aborts a registry-wide scan (e.g. Harbor replication).
+	if index, _ := m.GetIndex(repoPath); index != nil {
+		if versions, ok := index.Entries[chartName]; ok {
+			fromIndex = true
 			for _, v := range versions {
 				tags = append(tags, strings.TrimLeft(v.Version, "v"))
 			}
 		}
-	} else {
+	}
+
+	if !fromIndex {
+		c, ok := m.manifests[fullRepo]
+		if !ok {
+			if err := m.prepareChart(req.Context(), fullRepo, "", rewriteOpts); err != nil {
+				return err
+			}
+			c = m.manifests[fullRepo]
+		}
 		for tag := range c {
 			if !strings.Contains(tag, "sha256:") {
 				tags = append(tags, tag)
