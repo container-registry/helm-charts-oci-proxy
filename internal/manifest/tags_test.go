@@ -1,7 +1,6 @@
 package manifest
 
 import (
-	"context"
 	goerrors "errors"
 	"log"
 	"net/http"
@@ -23,9 +22,9 @@ func (nopCache) Get(_ interface{}) (interface{}, bool) { return nil, false }
 // TestHandleTags_NoChartName guards against a panic: "/v2/tags/list" passes the
 // path length check but leaves no repository parts to slice.
 func TestHandleTags_NoChartName(t *testing.T) {
-	m := NewManifests(context.Background(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 
-	err := m.HandleTags(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v2/tags/list", nil))
+	err := m.HandleTags(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/tags/list", nil))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
