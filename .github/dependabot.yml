@@ -4,6 +4,17 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      # Do not propose a version published in the last week. A compromised
+      # release is usually yanked well inside that window.
+      default-days: 7
+    # PR titles become the squash-merge subject, which release-please parses as
+    # a conventional commit. A dependency bump ships in the binary, so it is a
+    # patch-worthy "fix"; see .github/workflows/pr-title.yml for the allowed types.
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+      include: scope
     groups:
       go-dependencies:
         update-types:
@@ -17,6 +28,13 @@ updates:
       - "/.github/actions/harbor-login"
     schedule:
       interval: weekly
+    cooldown:
+      # Do not propose a version published in the last week. A compromised
+      # release is usually yanked well inside that window.
+      default-days: 7
+    commit-message:
+      prefix: ci
+      include: scope
     groups:
       actions:
         patterns:
@@ -25,3 +43,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    cooldown:
+      # Do not propose a version published in the last week. A compromised
+      # release is usually yanked well inside that window.
+      default-days: 7
+    commit-message:
+      prefix: build
+      include: scope
