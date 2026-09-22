@@ -1,0 +1,52 @@
+name: Deploy CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'deploy/**'
+      - 'Taskfile.yml'
+      - 'taskfiles/deploy.yml'
+      - '.github/workflows/deploy-ci.yml'
+      - '.github/actions/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy/**'
+      - 'Taskfile.yml'
+      - 'taskfiles/deploy.yml'
+      - '.github/workflows/deploy-ci.yml'
+      - '.github/actions/**'
+
+permissions: {}
+
+concurrency:
+  group: deploy-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up tools
+        uses: ./.github/actions/setup
+        with:
+          helm: 'true'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Render overlays
+        run: task deploy:build
+
+      - name: Render chart with prod values
+        # Catches values that the released chart rejects before Flux applies
+        # them unattended in the cluster.
+        run: task deploy:template

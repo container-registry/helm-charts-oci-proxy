@@ -1,0 +1,58 @@
+name: Publish Deploy Artifact
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'deploy/prod/**'
+      - 'Taskfile.yml'
+      - 'taskfiles/deploy.yml'
+      - '.github/workflows/publish-deploy.yml'
+      - '.github/actions/**'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # No cancel-in-progress: cancelling mid-push can leave the rolling `prod` tag
+  # pointing at a partially uploaded artifact that Flux would then pull.
+  group: publish-deploy
+
+jobs:
+  publish:
+    # workflow_dispatch from another ref must not overwrite the `prod` tag.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      REGISTRY_ADDRESS: ${{ vars.REGISTRY_ADDRESS || '8gears.container-registry.com' }}
+      REGISTRY_PROJECT: ${{ vars.REGISTRY_PROJECT || 'library' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up tools
+        uses: ./.github/actions/setup
+        with:
+          oras: 'true'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to registry via OIDC
+        uses: ./.github/actions/harbor-login
+        with:
+          registry_address: ${{ env.REGISTRY_ADDRESS }}
+          # docker included so ~/.docker/config.json carries the credentials cosign reads.
+          clients: docker oras
+
+      - name: Publish and sign the deploy artifact
+        run: |
+          task deploy:release \
+            REGISTRY_ADDRESS="${REGISTRY_ADDRESS}" \
+            REGISTRY_PROJECT="${REGISTRY_PROJECT}"

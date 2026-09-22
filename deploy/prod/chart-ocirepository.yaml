@@ -1,0 +1,25 @@
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: helm-charts-oci-proxy
+  namespace: chartproxy
+spec:
+  # Registry poll interval: how fast a new chart release reaches prod.
+  interval: 5m
+  url: oci://8gears.container-registry.com/library/helm-charts-oci-proxy
+  ref:
+    # Any 1.x chart release is picked up automatically; the image tag comes
+    # from the chart's appVersion, so an app release reaches prod through the
+    # appVersion PR + chart release (docs/RELEASES.md), not through this file.
+    semver: ">=1.3.1 <2.0.0"
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy
+  # publish-chart.yml is a reusable workflow, and the signing certificate
+  # carries the reusable workflow's ref rather than the caller's. Confirmed
+  # with `cosign verify --certificate-identity` against a released chart.
+  verify:
+    provider: cosign
+    matchOIDCIdentity:
+      - issuer: ^https://token\.actions\.githubusercontent\.com$
+        subject: ^https://github\.com/container-registry/helm-charts-oci-proxy/\.github/workflows/publish-chart\.yml@refs/heads/main$
