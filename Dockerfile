@@ -1,6 +1,6 @@
 # --platform=$BUILDPLATFORM: run the compiler natively and cross-compile via
 # GOOS/GOARCH; building the arm64 half under QEMU takes ~10x longer.
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/go:latest@sha256:694c79dc301a249df5f2541aff2d82718d4ef3ff36bfa8a9eaee55ecadd40d16 AS build
+FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/go:latest@sha256:ab5ed13913bd2d03b535ce3c3a1782bdcfef821f185697341b28e82aa5061f51 AS build
 ARG VERSION=dev
 ARG TARGETOS TARGETARCH
 ENV CGO_ENABLED=0
