@@ -50,6 +50,8 @@ jobs:
         with:
           # A PAT lets the bot PR trigger chart CI; github.token PRs don't trigger workflows.
           token: ${{ secrets.RELEASE_BOT_TOKEN || github.token }}
+          # The DCO app checks bot commits too.
+          signoff: true
           branch: bot/update-appversion
           delete-branch: true
           commit-message: 'fix(chart): update appVersion to ${{ inputs.version }}'
