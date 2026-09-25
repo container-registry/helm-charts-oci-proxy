@@ -135,7 +135,7 @@ and are told apart by their tags:
 |-----|----------|
 | `vX.Y.Z` | Application image of [release](https://github.com/container-registry/helm-charts-oci-proxy/releases) `vX.Y.Z` |
 | `latest` | Image of the latest application release |
-| `main`, `main-<sha>` | Image built from the current `main` branch, unreleased |
+| `main`, `main-<7-char sha>` | Unreleased build of `main`. Only commits that touch the application get one, docs and chart-only commits are skipped, and a commit superseded while queued may be skipped too. List the tags first (`oras repo tags 8gears.container-registry.com/library/helm-charts-oci-proxy`) before pulling a specific SHA |
 | `X.Y.Z` | Helm chart `X.Y.Z` (git tag `chart-vX.Y.Z`), whose `appVersion` pins the matching image tag |
 
 Pulling a chart tag with `docker pull` fails with `unsupported media type application/vnd.cncf.helm.config.v1+json`.
