@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/chart-v2.0.0...chart-v2.0.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* **chart:** update appVersion to v1.1.1 ([#86](https://github.com/container-registry/helm-charts-oci-proxy/issues/86)) ([21420c1](https://github.com/container-registry/helm-charts-oci-proxy/commit/21420c1630b7b9d6fddff93683d4ec54113053b5))
+
 ## [2.0.0](https://github.com/container-registry/helm-charts-oci-proxy/compare/chart-v1.3.1...chart-v2.0.0) (2026-09-25)
 
 
