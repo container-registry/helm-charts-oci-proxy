@@ -53,7 +53,7 @@ helm install ocip oci://8gears.container-registry.com/library/helm-charts-oci-pr
 | `service.port` | `9000` | Service port |
 | `ingress.enabled` | `false` | Enable ingress |
 | `ingress.className` | `nginx` | Ingress class |
-| `ingress.annotations` | cert-manager/nginx annotations | Ingress annotations |
+| `ingress.annotations` | `{}` | Ingress annotations (cert-manager issuer, controller settings); none are set by default |
 | `ingress.hosts` | `chartproxy.container-registry.com` | Hostnames and paths |
 | `ingress.tls` | ACME TLS secret | TLS configuration |
 

@@ -1,0 +1,58 @@
+suite: ingress
+templates:
+  - templates/ingress.yaml
+
+tests:
+  - it: should not render without ingress.enabled
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render no annotations by default
+    set:
+      ingress.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notExists:
+          path: metadata.annotations
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+
+  - it: should render only the annotations the user sets
+    set:
+      ingress.enabled: true
+      ingress.annotations:
+        cert-manager.io/issuer: my-issuer
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            cert-manager.io/issuer: my-issuer
+
+  - it: should not set the legacy class annotation on current Kubernetes
+    set:
+      ingress.enabled: true
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    asserts:
+      - notExists:
+          path: metadata.annotations["kubernetes.io/ingress.class"]
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+
+  - it: should fall back to the class annotation before Kubernetes 1.18
+    set:
+      ingress.enabled: true
+    capabilities:
+      majorVersion: 1
+      minorVersion: 17
+    asserts:
+      - equal:
+          path: metadata.annotations["kubernetes.io/ingress.class"]
+          value: nginx
+      - notExists:
+          path: spec.ingressClassName
