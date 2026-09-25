@@ -107,8 +107,9 @@ helm pull --plain-http oci://localhost:9000/charts.jetstack.io/cert-manager --ve
 ```
 
 To serve TLS directly, mount a certificate and key and set `USE_TLS=true`. `CERT_FILE` and `KEY_FILE`
-name the files inside the container; without them the proxy looks for `certs/registry.pem` and
-`certs/registry-key.pem` relative to its working directory, `/certs/...` in the image.
+name the files inside the container. Without them the proxy looks for `certs/registry.pem` and
+`certs/registry-key.pem` relative to its working directory, which is `/` in the image, so the defaults resolve to
+`/certs/registry.pem` and `/certs/registry-key.pem`.
 
 ```bash
 docker run --rm -p 9000:9000 \
