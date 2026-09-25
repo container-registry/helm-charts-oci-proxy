@@ -46,9 +46,6 @@ spec:
         # than "dns-controller" makes it skip (source/ingress.go). Removing this
         # annotation IS the production cutover from the current deployment.
         external-dns.alpha.kubernetes.io/controller: none
-        # The chart still ships the pre-1.18 class annotation by default, and the
-        # API server rejects an Ingress that carries both it and className.
-        kubernetes.io/ingress.class: null
         cert-manager.io/cluster-issuer: letsencrypt-prod
         nginx.ingress.kubernetes.io/proxy-body-size: "0"
         nginx.ingress.kubernetes.io/ssl-redirect: "true"

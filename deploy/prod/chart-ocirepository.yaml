@@ -8,10 +8,11 @@ spec:
   interval: 5m
   url: oci://8gears.container-registry.com/library/helm-charts-oci-proxy
   ref:
-    # Any 1.x chart release is picked up automatically; the image tag comes
+    # Any 2.x chart release is picked up automatically; the image tag comes
     # from the chart's appVersion, so an app release reaches prod through the
     # appVersion PR + chart release (docs/RELEASES.md), not through this file.
-    semver: ">=1.3.1 <2.0.0"
+    # A chart major bump needs a deliberate range change here.
+    semver: ">=2.0.1 <3.0.0"
   layerSelector:
     mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
     operation: copy
