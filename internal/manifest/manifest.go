@@ -120,6 +120,9 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	if target != "" && strings.HasPrefix(target, "v") {
 		target = target[1:]
 	}
+	// Cached manifests are keyed by the index version, so the tag form is
+	// normalised once here and never looked up again.
+	target = helper.TagToVersion(target)
 
 	var repoParts []string
 	for i := len(elem) - 3; i > 0; i-- {
@@ -205,16 +208,10 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 			}
 			ma, ok = m.manifests[repo][target]
 			if !ok {
-				// check if chart was just remapped to an _ before failing
-				target = helper.SemVerReplace(target)
-				ma, ok = m.manifests[repo][target]
-				// we failed
-				if !ok {
-					return &errors.RegError{
-						Status:  http.StatusNotFound,
-						Code:    "NOT FOUND",
-						Message: "Chart prepare error",
-					}
+				return &errors.RegError{
+					Status:  http.StatusNotFound,
+					Code:    "NOT FOUND",
+					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
 				}
 			}
 		}
@@ -292,7 +289,7 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 		if versions, ok := index.Entries[chartName]; ok {
 			fromIndex = true
 			for _, v := range versions {
-				tags = append(tags, strings.TrimLeft(v.Version, "v"))
+				tags = append(tags, helper.VersionToTag(strings.TrimLeft(v.Version, "v")))
 			}
 		}
 	}
@@ -307,7 +304,7 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 		}
 		for tag := range c {
 			if !strings.Contains(tag, "sha256:") {
-				tags = append(tags, tag)
+				tags = append(tags, helper.VersionToTag(tag))
 			}
 		}
 	}

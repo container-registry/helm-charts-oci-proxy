@@ -72,9 +72,13 @@ func IsV2(req *http.Request) bool {
 	return elems[len(elems)-1] == "v2"
 }
 
-func SemVerReplace(semver string) string {
-	if semver != "" && strings.Contains(semver, "_") {
-		semver = strings.ReplaceAll(semver, "_", "+")
-	}
-	return semver
+// Helm writes build metadata into OCI tags with "_" in place of "+", because the
+// distribution spec's tag grammar has no "+" (helm/helm#10166). Semver forbids
+// "_", so the mapping is lossless in both directions.
+func TagToVersion(tag string) string {
+	return strings.ReplaceAll(tag, "_", "+")
+}
+
+func VersionToTag(version string) string {
+	return strings.ReplaceAll(version, "+", "_")
 }
