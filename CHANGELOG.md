@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.1.0...v1.1.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* serve chart versions with build metadata by their OCI tag ([#85](https://github.com/container-registry/helm-charts-oci-proxy/issues/85)) ([e650a9f](https://github.com/container-registry/helm-charts-oci-proxy/commit/e650a9fefaa9674845ea2a9bbf78f3e2c3d96166))
+
+
+### Documentation
+
+* **readme:** standalone run, image tags, Harbor endpoint rules ([#82](https://github.com/container-registry/helm-charts-oci-proxy/issues/82)) ([ea2f065](https://github.com/container-registry/helm-charts-oci-proxy/commit/ea2f065f8d61f987774009f37b24e7ded42a87fc))
+
 ## [1.1.0](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.0.0...v1.1.0) (2026-09-22)
 
 
