@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.1.1...v1.1.2) (2026-09-26)
+
+
+### Documentation
+
+* **deploy:** render the deployment diagram with SVGBob via Kroki ([#90](https://github.com/container-registry/helm-charts-oci-proxy/issues/90)) ([27da143](https://github.com/container-registry/helm-charts-oci-proxy/commit/27da1434f071886cf155062b0ff88a9049bbb641))
+
 ## [1.1.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.1.0...v1.1.1) (2026-09-25)
 
 
