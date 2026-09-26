@@ -11,18 +11,46 @@ worked example of running a service from nothing but OCI artifacts:
   verifies the signing identity down to the workflow file and branch.
 - Releases roll out without a person in the loop, and a major version bump does not.
 
+<!--
+```SVGBob
+     "GitHub Actions"                                       "GitHub Actions"
+     "publish-deploy.yml"                                   "publish-chart.yml"
+     "push to main touching deploy/prod/**"                 "chart release chart-vX.Y.Z"
+                    │                                                      │
+                    │ "package + oras push"                                │ "helm push"
+                    │ "cosign sign, keyless"                               │ "cosign sign, keyless"
+                    ▼                                                      ▼
+┌────────────────────────────────────────┐             ┌────────────────────────────────────────┐
+│ "Harbor, public project library"       │             │ "Harbor, public project library"       │
+│ "helm-charts-oci-proxy-deploy"         │             │ "helm-charts-oci-proxy"                │
+│ ":prod (mutable)  :sha-<commit>"       │             │ "chart X.Y.Z, appVersion pins image"   │
+└───────────────────┬────────────────────┘             └───────────────────┬────────────────────┘
+                    │ "anonymous pull, every 5m"                           │ "anonymous pull, every 5m"
+                    │ "cosign: publish-deploy.yml@main"                    │ "cosign: publish-chart.yml@main"
+                    ▼                                                      │ "semver >=2.0.1 <3.0.0"
+┌──────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────┐
+│ "Kubernetes cluster, Flux"                                               │                                       │
+│                                                                          ▼                                       │
+│   ┌────────────────────────────────┐                     ┌────────────────────────────────┐                      │
+│   │ "OCIRepository"                │                     │ "OCIRepository"                │                      │
+│   │ "chartproxy-prod"              │                     │ "helm-charts-oci-proxy"        │                      │
+│   └───────────────┬────────────────┘                     └───────────────┬────────────────┘                      │
+│                   │ "sourceRef"                                          │ "chartRef"                            │
+│                   ▼                                                      ▼                                       │
+│   ┌────────────────────────────────┐       "applies"     ┌────────────────────────────────┐                      │
+│   │ "Kustomization"                ├────────────────────▶│ "HelmRelease chartproxy"       │                      │
+│   │ "chartproxy-prod"              │                     │ "+ Namespace, OCIRepository"   │                      │
+│   └────────────────────────────────┘                     └───────────────┬────────────────┘                      │
+│                                                                          │ "helm upgrade"                        │
+│                                                                          ▼                                       │
+│                                                          ┌────────────────────────────────┐                      │
+│                                                          │ "Deployment, 1 replica"        │                      │
+│                                                          │ "Service, Ingress, Certificate"│                      │
+│                                                          └────────────────────────────────┘                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-deploy/prod/**  ──CI (publish-deploy.yml)──▶  oci://8gears.container-registry.com/library/helm-charts-oci-proxy-deploy:prod
-                                                        │  OCIRepository chartproxy-prod (5m, cosign keyless)
-                                                        ▼
-                                              Flux Kustomization chartproxy-prod (10m, prune, wait)
-                                                        │ applies
-                                                        ▼
-                                    Namespace + OCIRepository(chart) + HelmRelease
-                                                        │  semver >=2.0.1 <3.0.0 (5m, cosign keyless)
-                                                        ▼
-                                    oci://8gears.container-registry.com/library/helm-charts-oci-proxy
-```
+-->
+![Diagram](https://kroki.io/svgbob/svg/eNrtV81u00AQvucpRnuC1klbEJeoVKAiaFUJpCAh4LZ2pvHSXa-1u45qThVnDj1EUQ88AmdOeZo8CWs7CjSJE8du4gixWsVy5PnZnfm-mQGwi7xh5ixy4aVnmAw0gWJrVqyR_RtGLmfab3Yx5DJuxYIXUTgV83yqTCo11ad9MBIEZYF9Rp7Pgh5k2g9CJbsHe3vzFkiqBxRypBohfWv2P7Y-tT5PFM-s8eAblFpWMFchCal3RXsI-yAV1ZCchRRQCMRHLrLP85V7UrNeAMmPA1cYc9Qrg5cvuNjOcFTyVoajxnjwfTy4qWnfzhy7Tlca6a2fUeVK5UCa6R7Y1P2CngHOXEVVTHLycD3RxjR5MiDppvRY035_HU8ASXIzPl-ULMr59PN2AkB4JCJDXY6PAdrap81jTwrBzMnSM2UATRHpAA3DD6i05REIWaCBCYsaMrU0qHD7P6sF727G8zpdyacCGsggFjJKKIZzB7CPKoZngqyiglzBVbTThnmif5FwNCksOKX6TO6BCSixqFHY88DJ8yetw9YRHD-1j0NSLzFtZ4_q5bqLyEUVoEENHo-0QUter3l0TUpEsXgZLl3Dq2XeH9NbSazbHCdqM33vAmzw352edzC0YDdSLawd-YAtJzrrQEosWdFL6hNZw4Hl9a-QA4PNV4W7HCdqM70EfhkRy0h52MFLsiaDp6FYJbfEeIX-dbfRT2zLxBlOGv4dQv-FpXsp2FeaTIULIPyjkhPDX1lDbGHa-Xu2u4fTLfDEPrylArWd79CBOdbaCE_c_Ns8ARX6vHRajsKeol0kO90hlD7lLuC7SohepVOCwMA4cATKvjGPrlNYqxh_j6rPEqSeBz2FWjtwisqwS-uCQbJJ47WB_AEm5_972a3_BjODq2g=)
 
 ## Layout
 

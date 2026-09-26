@@ -9,6 +9,8 @@ includes:
     taskfile: taskfiles/chart.yml
   deploy:
     taskfile: taskfiles/deploy.yml
+  docs:
+    taskfile: taskfiles/docs.yml
 
 tasks:
   default:
