@@ -24,6 +24,11 @@ jobs:
     # workflow_dispatch from another ref must not overwrite the `prod` tag.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Every publish is a GitHub deployment to "production". Success means the
+    # artifact is published and signed; Flux converges within its intervals.
+    environment:
+      name: production
+      url: https://chartproxy.container-registry.com
     permissions:
       contents: read
       id-token: write
