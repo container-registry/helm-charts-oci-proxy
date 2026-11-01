@@ -180,6 +180,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
+	chartPrepareAttempts.Add(1)
 	// The chart already lives in an OCI registry; there is no tarball to convert.
 	if u.Scheme == "oci" {
 		return &errors.RegError{
@@ -190,7 +191,6 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	downloadUrl := u.String()
 
-	chartPrepareAttempts.Add(1)
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
 		return downloadError(err, "MANIFEST_UNKNOWN")

@@ -148,7 +148,11 @@ entries:
 	m.httpClient = srv.Client()
 	repo := strings.TrimPrefix(srv.URL, "https://") + "/demo"
 
+	attempts := chartPrepareAttempts.Value()
 	rec, err := getManifest(t, m, repo)
+	if got := chartPrepareAttempts.Value() - attempts; got != 1 {
+		t.Errorf("chart_prepare_attempts grew by %d, want 1", got)
+	}
 	if err == nil {
 		t.Fatalf("expected an error, got status %d", rec.Code)
 	}
