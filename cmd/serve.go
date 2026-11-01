@@ -63,7 +63,10 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			debug, _ := env.GetBool("DEBUG", false)
 			cacheTTL, _ := env.GetInt("MANIFEST_CACHE_TTL", 60)       // 1 minute
 			indexCacheTTL, _ := env.GetInt("INDEX_CACHE_TTL", 3600*4) // 4 hours
-			indexCacheMiB, _ := env.GetInt("INDEX_CACHE_SIZE_MIB", 128)
+			indexCacheMiB, err := env.GetInt("INDEX_CACHE_SIZE_MIB", 128)
+			if err != nil {
+				l.Fatalln(fmt.Errorf("INDEX_CACHE_SIZE_MIB: %w", err))
+			}
 			indexErrorCacheTTL, _ := env.GetInt("INDEX_ERROR_CACHE_TTL", 30) // 30 seconds
 
 			rewriteDeps, _ := env.GetBool("REWRITE_DEPENDENCIES", false)
@@ -83,14 +86,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 
 			// DIAG_ADDR serves pprof and expvar on a separate listener; keep it off the public port.
 			diagAddr := env.GetString("DIAG_ADDR", "")
-			indexCache, err := ristretto.NewCache(&ristretto.Config{
-				// One key per chart repository; 10x the expected key count, as
-				// ristretto recommends. 1e7 counters cost a fixed 48MiB of heap.
-				NumCounters: 1e4,
-				MaxCost:     int64(indexCacheMiB) << 20,
-				BufferItems: 64,
-				Metrics:     diagAddr != "",
-			})
+			indexCache, err := newIndexCache(indexCacheMiB, diagAddr != "")
 			if err != nil {
 				l.Fatalln(err)
 			}
@@ -117,6 +113,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				Debug:                debug,
 				CacheTTL:             time.Duration(cacheTTL) * time.Second,
 				IndexCacheTTL:        time.Duration(indexCacheTTL) * time.Second,
+				IndexCacheMaxCost:    int64(indexCacheMiB) << 20,
 				IndexErrorCacheTTl:   time.Duration(indexErrorCacheTTL) * time.Second,
 				RewriteDependencies:  rewriteDeps,
 				ProxyHost:            proxyHost,
@@ -157,4 +154,22 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			return nil
 		},
 	}
+}
+
+const maxIndexCacheMiB = 1 << 20
+
+// newIndexCache holds one parsed index per chart repository. NumCounters is 10x
+// the expected key count, as ristretto recommends; 1e7 cost a fixed 48MiB.
+// Entry costs come from manifest.IndexCost, which already includes overhead.
+func newIndexCache(sizeMiB int, metrics bool) (*ristretto.Cache, error) {
+	if sizeMiB < 1 || sizeMiB > maxIndexCacheMiB {
+		return nil, fmt.Errorf("INDEX_CACHE_SIZE_MIB must be between 1 and %d, got %d", maxIndexCacheMiB, sizeMiB)
+	}
+	return ristretto.NewCache(&ristretto.Config{
+		NumCounters:        1e4,
+		MaxCost:            int64(sizeMiB) << 20,
+		BufferItems:        64,
+		Metrics:            metrics,
+		IgnoreInternalCost: true,
+	})
 }

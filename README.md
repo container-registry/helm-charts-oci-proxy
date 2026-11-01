@@ -181,7 +181,7 @@ There are not many options in configure the application except the following.
 * `DEBUG` - enables debug logging for any truthy value (`true`, `1`), default `false`
 * `MANIFEST_CACHE_TTL` - for how long we have stores manifest and its related blobs, the default value is `60` seconds.
 * `INDEX_CACHE_TTL` - for how long we store chart index file content, the default value is `14400` seconds (4h)
-* `INDEX_CACHE_SIZE_MIB` - upper bound for parsed index files held in memory, in MiB. A parsed index is accounted at twice its YAML size; the largest public index (bitnami, 27.5MB) needs about 55MiB. Default `128`.
+* `INDEX_CACHE_SIZE_MIB` - size budget in MiB for cached index files. A parsed index is charged twice its YAML size, and one larger than the budget is charged the whole budget; the largest public index (bitnami, 27.5MB) takes about 55MiB. Indexes still in use by in-flight requests or being parsed are outside the budget, so it is not a hard memory limit. Default `128`, valid from 1 to 1048576.
 * `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. The default value is `30` seconds.
 * `USE_TLS` - enabled HTTP over TLS
 * `CERT_FILE` - TLS certificate path when `USE_TLS` is set, default `certs/registry.pem`

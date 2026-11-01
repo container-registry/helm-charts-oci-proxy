@@ -334,7 +334,7 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 			// cache error too to avoid external resource exhausting
 			ttl = m.config.IndexErrorCacheTTl
 		}
-		m.cache.SetWithTTL(repoURLPath, res, indexCost(size), ttl)
+		m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
 		return res.c, res.err
 	}
 
@@ -365,18 +365,31 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, int, err
 		return nil, 0, err
 	}
 	idx, err := ParseIndex(data)
-	return idx, len(data), err
+	if err != nil {
+		return idx, 0, err
+	}
+	return idx, len(data), nil
 }
 
-// indexCost is the cache cost of a parsed index downloaded as size bytes.
-// Measured retained heap is 1.6x to 1.7x the YAML size (bitnami 27.5MB -> 44MiB,
-// prometheus-community 6.6MB -> 9.8MiB); 2x keeps the bound conservative.
-// Error entries cost 1 so they never push out a parsed index.
-func indexCost(size int) int64 {
-	if size <= 0 {
-		return 1
+// errorEntryCost approximates a cached download error: the cache entry, the
+// error value and its message.
+const errorEntryCost = 512
+
+// IndexCost is the cache cost of a parsed index downloaded as size bytes, or of
+// a cached download error. Measured retained heap of a parsed index is 1.6x to
+// 1.7x its YAML size (bitnami 27.5MB -> 44MiB, prometheus-community 6.6MB ->
+// 9.8MiB); 2x keeps the estimate conservative. The cost is capped at maxCost so
+// an index larger than the budget is not refused for its size alone and then
+// downloaded on every request.
+func IndexCost(size int, err error, maxCost int64) int64 {
+	if err != nil {
+		return errorEntryCost + int64(len(err.Error()))
 	}
-	return 2 * int64(size)
+	c := max(2*int64(size), 1)
+	if maxCost > 0 && c > maxCost {
+		c = maxCost
+	}
+	return c
 }
 
 // ignoreSkippableChartValidationError is unexported in helm's repo package;
