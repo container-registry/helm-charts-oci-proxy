@@ -12,13 +12,11 @@ import (
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/go-digest"
+	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
 	helmregistry "helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/repo"
-	"oras.land/oras-go/v2"
-	"oras.land/oras-go/v2/content"
-	"oras.land/oras-go/v2/content/memory"
 )
 
 func hashOf(d digest.Digest) (v1.Hash, error) {
@@ -35,28 +33,19 @@ func (m *Manifests) storeChart(ctx context.Context, path string, chartVer *repo.
 		return errors.RegErrInternal(err)
 	}
 	configDesc := ocispec.Descriptor{
-		MediaType:   helmregistry.ConfigMediaType,
-		Digest:      digest.FromBytes(configData),
-		Size:        int64(len(configData)),
-		Annotations: map[string]string{ocispec.AnnotationTitle: "$config"},
+		MediaType: helmregistry.ConfigMediaType,
+		Digest:    digest.FromBytes(configData),
+		Size:      int64(len(configData)),
 	}
-	memStore := memory.New()
-	if err := memStore.Push(ctx, configDesc, bytes.NewReader(configData)); err != nil {
-		return errors.RegErrInternal(err)
-	}
-	// The config descriptor inside the manifest carries no annotations.
-	configDesc.Annotations = nil
-	packOpts := oras.PackOptions{
-		ManifestAnnotations: generateOCIAnnotations(meta, getDeterministicCreatedTimestamp(chartVer)),
-		ConfigDescriptor:    &configDesc,
-		PackImageManifest:   true,
-	}
-	// Pack only marshals descriptors; the layer content is never read.
-	root, err := oras.Pack(ctx, memStore, "", []ocispec.Descriptor{layerDesc}, packOpts)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	manifestJSON, err := content.FetchAll(ctx, memStore, root)
+	// The same fields, in the same order, that oras.Pack wrote before; the
+	// created annotation is always set, so nothing else is added.
+	manifestJSON, err := json.Marshal(ocispec.Manifest{
+		Versioned:   specs.Versioned{SchemaVersion: 2},
+		MediaType:   ocispec.MediaTypeImageManifest,
+		Config:      configDesc,
+		Layers:      []ocispec.Descriptor{layerDesc},
+		Annotations: generateOCIAnnotations(meta, getDeterministicCreatedTimestamp(chartVer)),
+	})
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
@@ -93,12 +82,12 @@ func (m *Manifests) storeChart(ctx context.Context, path string, chartVer *repo.
 
 	repoKey := fmt.Sprintf("%s/%s", path, chartVer.Name)
 	ma := Manifest{
-		ContentType: root.MediaType,
+		ContentType: ocispec.MediaTypeImageManifest,
 		Blob:        manifestJSON,
 		Refs:        []string{configHash.String(), layerHash.String()},
 		CreatedAt:   time.Now(),
 	}
-	if err := m.Write(repoKey, root.Digest.String(), ma); err != nil {
+	if err := m.Write(repoKey, digest.FromBytes(manifestJSON).String(), ma); err != nil {
 		return errors.RegErrInternal(err)
 	}
 	if reference != "" {
