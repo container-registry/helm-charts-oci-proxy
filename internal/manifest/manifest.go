@@ -169,7 +169,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 				// we failed
 				return &errors.RegError{
 					Status:  http.StatusNotFound,
-					Code:    "NOT FOUND",
+					Code:    "MANIFEST_UNKNOWN",
 					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
 				}
 			}
@@ -206,7 +206,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 			if !ok {
 				return &errors.RegError{
 					Status:  http.StatusNotFound,
-					Code:    "NOT FOUND",
+					Code:    "MANIFEST_UNKNOWN",
 					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
 				}
 			}
@@ -285,6 +285,11 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 		if versions, ok := index.Entries[chartName]; ok {
 			fromIndex = true
 			for _, v := range versions {
+				// Same resolution as prepareChart: versions without a convertible
+				// tarball would only ever answer 404.
+				if u, err := ChartURL(repoPath, v); err != nil || u.Scheme == "oci" {
+					continue
+				}
 				tags = append(tags, helper.VersionToTag(strings.TrimLeft(v.Version, "v")))
 			}
 		}

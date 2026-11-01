@@ -162,7 +162,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if err != nil {
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
-			Code:    "NOT FOUND",
+			Code:    "MANIFEST_UNKNOWN",
 			Message: fmt.Sprintf("Chart: %s version: %s not found: %v", chart, reference, err),
 		}
 	}
@@ -170,7 +170,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if len(chartVer.URLs) == 0 {
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
-			Code:    "NOT FOUND",
+			Code:    "MANIFEST_UNKNOWN",
 			Message: fmt.Sprintf("Chart has no URLs"),
 		}
 	}
