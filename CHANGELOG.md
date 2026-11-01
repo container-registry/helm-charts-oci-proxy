@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.2.0](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.1.1...v1.2.0) (2026-11-01)
+
+
+### Features
+
+* **diag:** add DIAG_ADDR diagnostics listener and load replay rig ([#98](https://github.com/container-registry/helm-charts-oci-proxy/issues/98)) ([1ba02b3](https://github.com/container-registry/helm-charts-oci-proxy/commit/1ba02b34fadd60280e51d007a0d02908b193262c))
+
+
+### Bug Fixes
+
+* **deps:** bump the go-dependencies group across 1 directory with 2 updates ([#97](https://github.com/container-registry/helm-charts-oci-proxy/issues/97)) ([684e38e](https://github.com/container-registry/helm-charts-oci-proxy/commit/684e38ee850f95a424a9f04145c72fe079683ed2))
+* **manifest:** answer 404 for chart versions published only as OCI artifacts ([#100](https://github.com/container-registry/helm-charts-oci-proxy/issues/100)) ([e4a9516](https://github.com/container-registry/helm-charts-oci-proxy/commit/e4a9516b92e442a47ce0364acbfe90a807493021))
+* **manifest:** never package an upstream error page as a chart ([#99](https://github.com/container-registry/helm-charts-oci-proxy/issues/99)) ([de06931](https://github.com/container-registry/helm-charts-oci-proxy/commit/de06931af4953b5d0f1c0e0620c0cfaa9815a789))
+
+
+### Documentation
+
+* **deploy:** render the deployment diagram with SVGBob via Kroki ([#90](https://github.com/container-registry/helm-charts-oci-proxy/issues/90)) ([27da143](https://github.com/container-registry/helm-charts-oci-proxy/commit/27da1434f071886cf155062b0ff88a9049bbb641))
+
 ## [1.1.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.1.0...v1.1.1) (2026-09-25)
 
 
