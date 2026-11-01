@@ -131,7 +131,9 @@ chart repositories and kept only in memory, so nothing survives a restart.`,
 
 // runServer runs serve until ctx is cancelled, then lets in-flight requests
 // finish for at most timeout. ctx is already cancelled at that point, so the
-// drain needs its own deadline.
+// drain needs its own deadline. Requests still running after it, such as ones
+// waiting on a detached chart preparation, are cut off; that is a normal stop,
+// not a failure, so a rollout does not end with a non-zero exit.
 func runServer(ctx context.Context, s *http.Server, serve func() error, timeout time.Duration, l *log.Logger) error {
 	errCh := make(chan error, 1)
 	go func() { errCh <- serve() }()
@@ -144,8 +146,11 @@ func runServer(ctx context.Context, s *http.Server, serve func() error, timeout 
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	if err := s.Shutdown(shutdownCtx); err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("shutdown: %w", err)
+		}
+		l.Printf("requests still running after %s, closing their connections", timeout)
 		_ = s.Close()
-		return fmt.Errorf("shutdown: %w", err)
 	}
 	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
 		return err

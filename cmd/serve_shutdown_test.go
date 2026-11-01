@@ -63,6 +63,8 @@ func TestShutdownDrainsInFlightRequest(t *testing.T) {
 	}
 }
 
+// A request that outlives SHUTDOWN_TIMEOUT is cut off, and the server still
+// stops cleanly instead of failing the process.
 func TestShutdownGivesUpAfterTimeout(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
@@ -80,19 +82,30 @@ func TestShutdownGivesUpAfterTimeout(t *testing.T) {
 	go func() {
 		runErr <- runServer(ctx, s, func() error { return s.Serve(ln) }, 100*time.Millisecond, log.New(os.Stdout, "test-", 0))
 	}()
+	clientErr := make(chan error, 1)
 	go func() {
-		if resp, err := http.Get("http://" + ln.Addr().String()); err == nil {
+		resp, err := http.Get("http://" + ln.Addr().String())
+		if err == nil {
 			resp.Body.Close()
 		}
+		clientErr <- err
 	}()
 	<-started
 	cancel()
 	select {
 	case err := <-runErr:
-		if err == nil {
-			t.Fatal("runServer returned nil although a request was still running")
+		if err != nil {
+			t.Fatalf("runServer after the drain timeout: %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("runServer ignored the shutdown timeout")
+	}
+	select {
+	case err := <-clientErr:
+		if err == nil {
+			t.Error("the blocked request got a response; its connection was not closed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the blocked request was not cut off")
 	}
 }
