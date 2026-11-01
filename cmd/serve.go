@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
@@ -83,6 +84,10 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			useTLS, _ := env.GetBool("USE_TLS", false)
 			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
 			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
+			shutdownTimeout, err := env.GetInt("SHUTDOWN_TIMEOUT", 25)
+			if err != nil || shutdownTimeout < 1 {
+				l.Fatalln(fmt.Errorf("SHUTDOWN_TIMEOUT must be a positive number of seconds: %v", err))
+			}
 
 			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 			if err != nil {
@@ -140,28 +145,40 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 					registry.Debug(debug), registry.Logger(l)),
 			}
 
-			errCh := make(chan error)
-			go func() {
+			return runServer(ctx, s, func() error {
 				if useTLS {
 					l.Printf("listening HTTP over TLS serving on port %d", portI)
-					errCh <- s.ServeTLS(listener, certFile, keyfileFile)
-				} else {
-					l.Printf("listening HTTP on port %d", portI)
-					errCh <- s.Serve(listener)
+					return s.ServeTLS(listener, certFile, keyfileFile)
 				}
-			}()
-
-			<-ctx.Done()
-			l.Println("shutting down...")
-			if err := s.Shutdown(ctx); err != nil {
-				return err
-			}
-			if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
-				return err
-			}
-			return nil
+				l.Printf("listening HTTP on port %d", portI)
+				return s.Serve(listener)
+			}, time.Duration(shutdownTimeout)*time.Second, l)
 		},
 	}
+}
+
+// runServer runs serve until ctx is cancelled, then lets in-flight requests
+// finish for at most timeout. ctx is already cancelled at that point, so the
+// drain needs its own deadline.
+func runServer(ctx context.Context, s *http.Server, serve func() error, timeout time.Duration, l *log.Logger) error {
+	errCh := make(chan error, 1)
+	go func() { errCh <- serve() }()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+	}
+	l.Println("shutting down...")
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	if err := s.Shutdown(shutdownCtx); err != nil {
+		_ = s.Close()
+		return fmt.Errorf("shutdown: %w", err)
+	}
+	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 const maxIndexCacheMiB = 1 << 20

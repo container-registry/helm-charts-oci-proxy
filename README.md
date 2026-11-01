@@ -187,6 +187,7 @@ There are not many options in configure the application except the following.
 * `USE_TLS` - enabled HTTP over TLS
 * `CERT_FILE` - TLS certificate path when `USE_TLS` is set, default `certs/registry.pem`
 * `KEY_FILE` - TLS private key path when `USE_TLS` is set, default `certs/registry-key.pem`
+* `SHUTDOWN_TIMEOUT` - seconds to let in-flight requests finish after SIGTERM or SIGINT before the server closes them. Keep it below the pod's `terminationGracePeriodSeconds` (Kubernetes default 30). Default `25`.
 * `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Applies to every request. Requires `PROXY_HOST`; the proxy refuses to start without it. Default is `false`.
 * `PROXY_HOST` - the proxy host used in rewritten dependency URLs, e.g. `chartproxy.example.com`. Required when `REWRITE_DEPENDENCIES` is `true`.
 * `ALLOW_PRIVATE_NETWORKS` - allow upstream downloads from private, loopback, and link-local addresses. Off by default as an SSRF guard; enable only when proxying chart repositories on an internal network. Default is `false`.
