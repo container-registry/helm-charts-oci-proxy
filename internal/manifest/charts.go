@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
@@ -160,6 +161,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		downloadUrl = fmt.Sprintf("https://%s/%s", path, chartVer.URLs[0])
 	}
 
+	chartsPrepared.Add(1)
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
 		return errors.RegErrInternal(err)
@@ -304,6 +306,13 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 	return res.c, res.err
 }
 
+var (
+	indexParses    = expvar.NewInt("index_parses")
+	indexParseMs   = expvar.NewInt("index_parse_ms")
+	indexDownloads = expvar.NewInt("index_downloads")
+	chartsPrepared = expvar.NewInt("charts_prepared")
+)
+
 func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 	url := fmt.Sprintf("https://%s/index.yaml", repoURLPath)
 	if m.config.Debug {
@@ -313,12 +322,20 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseIndex(data)
+}
+
+// ParseIndex decodes and normalises a chart repository index the way the proxy
+// resolves chart versions from it.
+func ParseIndex(data []byte) (*repo.IndexFile, error) {
+	indexParses.Add(1)
+	defer func(t time.Time) { indexParseMs.Add(time.Since(t).Milliseconds()) }(time.Now())
 	i := repo.NewIndexFile()
 
 	if len(data) == 0 {
 		return i, repo.ErrEmptyIndexYaml
 	}
-	if err = yaml.UnmarshalStrict(data, i); err != nil {
+	if err := yaml.UnmarshalStrict(data, i); err != nil {
 		return nil, err
 	}
 
@@ -354,6 +371,7 @@ func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
 	if !ok || c == nil {
 		// nothing in the cache
 		res := &cacheResp{}
+		indexDownloads.Add(1)
 		res.c, res.err = m.download(url)
 
 		var ttl = m.config.IndexCacheTTL
