@@ -167,7 +167,7 @@ func TestPrepare_TransientFailureIsRetried(t *testing.T) {
 	}
 }
 
-// Each preparation buffers its tarball, so a sweep over many versions must not
+// Each preparation holds an upstream connection, so a sweep over many versions must not
 // start them all at once.
 func TestPrepare_ConcurrencyIsBounded(t *testing.T) {
 	tgz := chartTarball(t, "demo", "1.0.0")

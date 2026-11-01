@@ -58,6 +58,7 @@ type Manifests struct {
 	blobs       *streamBlobs
 	config      Config
 	httpClient  *http.Client
+	layerClient *http.Client
 }
 
 func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
@@ -75,7 +76,8 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		slots:       make(chan struct{}, concurrency),
 		failures:    newFailureCache(config.IndexErrorCacheTTl),
 	}
-	ma.blobs = newStreamBlobs(blobHandler, ma.openUpstream)
+	ma.layerClient = newLayerClient(ma.httpClient)
+	ma.blobs = newStreamBlobs(blobHandler, ma.openLayer)
 	ma.blobHandler = ma.blobs
 
 	go func() {

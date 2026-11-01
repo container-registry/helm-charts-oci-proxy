@@ -39,6 +39,7 @@ func newDownloadClient(allowPrivate bool) *http.Client {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = dialer.DialContext
+	transport.ResponseHeaderTimeout = 30 * time.Second
 	return &http.Client{
 		Timeout:   60 * time.Second,
 		Transport: transport,
@@ -68,4 +69,14 @@ func isPublicAddr(addr netip.Addr) bool {
 		addr.IsInterfaceLocalMulticast() ||
 		addr.IsMulticast() ||
 		addr.IsUnspecified())
+}
+
+// newLayerClient shares the download transport without the overall timeout.
+// A layer is streamed to a client at the client's pace, so a slow pull can take
+// longer than any fixed deadline; the transport's header timeout and the
+// request context still bound it.
+func newLayerClient(c *http.Client) *http.Client {
+	lc := *c
+	lc.Timeout = 0
+	return &lc
 }

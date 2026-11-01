@@ -4,15 +4,16 @@ import (
 	"bytes"
 	cerrors "errors"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
+
+	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/sirupsen/logrus"
 )
 
 // errNotFound represents an error locating the Blob.
@@ -71,7 +72,7 @@ func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 					http.Redirect(resp, req, rErr.Location, rErr.Code)
 					return nil
 				}
-				return errors.RegErrInternal(err)
+				return regErrOf(err)
 			}
 		} else {
 			rc, err := b.handler.Get(ctx, repo, h)
@@ -83,12 +84,12 @@ func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 					http.Redirect(resp, req, rErr.Location, rErr.Code)
 					return nil
 				}
-				return errors.RegErrInternal(err)
+				return regErrOf(err)
 			}
 			defer rc.Close()
 			size, err = io.Copy(io.Discard, rc)
 			if err != nil {
-				return errors.RegErrInternal(err)
+				return regErrOf(err)
 			}
 		}
 
@@ -119,7 +120,7 @@ func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 					http.Redirect(resp, req, rErr.Location, rErr.Code)
 					return nil
 				}
-				return errors.RegErrInternal(err)
+				return regErrOf(err)
 			}
 
 			rc, err := b.handler.Get(ctx, repo, h)
@@ -132,7 +133,7 @@ func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 					return nil
 				}
 
-				return errors.RegErrInternal(err)
+				return regErrOf(err)
 			}
 			defer rc.Close()
 			r = rc
@@ -147,7 +148,7 @@ func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 					return nil
 				}
 
-				return errors.RegErrInternal(err)
+				return regErrOf(err)
 			}
 			defer tmp.Close()
 			var buf bytes.Buffer
@@ -159,7 +160,14 @@ func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 		resp.Header().Set("Content-Length", fmt.Sprint(size))
 		resp.Header().Set("Docker-Content-Digest", h.String())
 		resp.WriteHeader(http.StatusOK)
-		io.Copy(resp, r)
+		hw := &holdLastByte{w: resp}
+		if _, err := io.Copy(hw, r); err != nil {
+			b.log.Printf("aborting blob %s: %v", h, err)
+			// The status is already sent. Dropping the connection before the last
+			// byte is the only way left to tell the client the body is bad.
+			panic(http.ErrAbortHandler)
+		}
+		_ = hw.flush()
 		return nil
 
 	default:
@@ -169,4 +177,45 @@ func (b *Blobs) Handle(resp http.ResponseWriter, req *http.Request) error {
 			Message: "We don't understand your method + url",
 		}
 	}
+}
+
+func regErrOf(err error) *errors.RegError {
+	var re *errors.RegError
+	if cerrors.As(err, &re) {
+		return re
+	}
+	return errors.RegErrInternal(err)
+}
+
+// holdLastByte withholds the final byte written until flush, so a body whose
+// verification fails at EOF never reaches the client complete.
+type holdLastByte struct {
+	w    io.Writer
+	last byte
+	have bool
+}
+
+func (h *holdLastByte) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if h.have {
+		if _, err := h.w.Write([]byte{h.last}); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := h.w.Write(p[:len(p)-1]); err != nil {
+		return 0, err
+	}
+	h.last, h.have = p[len(p)-1], true
+	return len(p), nil
+}
+
+func (h *holdLastByte) flush() error {
+	if !h.have {
+		return nil
+	}
+	h.have = false
+	_, err := h.w.Write([]byte{h.last})
+	return err
 }

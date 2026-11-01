@@ -4,29 +4,24 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	stderrors "errors"
 	"expvar"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
-	helmregistry "helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/repo"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
-	"oras.land/oras-go/v2"
-	"oras.land/oras-go/v2/content/memory"
-	"path/filepath"
 	"sigs.k8s.io/yaml"
-	"strings"
-	"time"
 )
 
 // extractChartMeta extracts metadata from a Helm chart archive.
@@ -202,11 +197,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	// Some hosts answer 200 with an HTML page for missing files; packaging that
 	// would hand clients a chart that cannot be installed.
 	if !isGzip(manifestData) {
-		return &errors.RegError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_ERROR",
-			Message: fmt.Sprintf("upstream %s did not return a gzip chart archive", downloadUrl),
-		}
+		return upstreamError("upstream %s did not return a gzip chart archive", downloadUrl)
 	}
 	m.checkIndexDigest(chartVer, digest.FromBytes(manifestData).Encoded())
 
@@ -214,11 +205,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	// gzip-compressed HTML passes isGzip but cannot be installed.
 	chartMeta, err := extractChartMeta(manifestData)
 	if err != nil {
-		return &errors.RegError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_ERROR",
-			Message: fmt.Sprintf("upstream %s did not return a valid chart archive: %v", downloadUrl, err),
-		}
+		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadUrl, err)
 	}
 
 	if rewriteOpts.Enabled && rewriteOpts.ProxyHost != "" {
@@ -238,95 +225,8 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		}
 	}
 
-	// Set deterministic timestamp for OCI manifest to ensure reproducible artifacts
-	deterministicTime := getDeterministicCreatedTimestamp(chartVer)
-	packOpts := oras.PackOptions{
-		ManifestAnnotations: generateOCIAnnotations(chartMeta, deterministicTime),
-	}
-	memStore := memory.New()
-
-	configData, err := json.Marshal(chartMeta)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-
-	desc := ocispec.Descriptor{
-		MediaType: helmregistry.ConfigMediaType,
-		Digest:    digest.FromBytes(configData),
-		Size:      int64(len(configData)),
-		Annotations: map[string]string{
-			ocispec.AnnotationTitle: "$config",
-		},
-	}
-
-	err = memStore.Push(ctx, desc, bytes.NewReader(configData))
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-
-	desc.Annotations = packOpts.ConfigAnnotations
-	packOpts.ConfigDescriptor = &desc
-	packOpts.PackImageManifest = true
-	name := filepath.Clean(filepath.Base(downloadUrl))
-
-	manifestFile := ocispec.Descriptor{
-		MediaType: helmregistry.ChartLayerMediaType,
-		Digest:    digest.FromBytes(manifestData),
-		Size:      int64(len(manifestData)),
-		Annotations: map[string]string{
-			ocispec.AnnotationTitle: name,
-		},
-	}
-
-	err = memStore.Push(ctx, manifestFile, bytes.NewReader(manifestData))
-	copyOptions := oras.DefaultCopyOptions
-	copyOptions.Concurrency = 1
-
-	root, err := oras.Pack(ctx, memStore, "", []ocispec.Descriptor{manifestFile}, packOpts)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	if err = memStore.Tag(ctx, root, root.Digest.String()); err != nil {
-		return errors.RegErrInternal(err)
-	}
-
-	var refs []string
-
-	copyOptions.PreCopy = func(ctx context.Context, desc ocispec.Descriptor) error {
-		if desc.MediaType == ocispec.MediaTypeImageManifest {
-			// oci manifest
-			for k, ref := range refs {
-				desc.Annotations[fmt.Sprintf("%s%d", ProxyRefAnnotationPrefix, k)] = ref
-			}
-		} else {
-			refs = append(refs, desc.Digest.String())
-		}
-		return nil
-	}
-
-	put, ok := m.blobHandler.(handler.BlobPutHandler)
-	if !ok {
-		return errors.RegErrInternal(fmt.Errorf("blob handler does not accept writes"))
-	}
-	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), put, m)
-	// The copy is memory to memory and has no I/O to wait on. Stopping it
-	// halfway, by cancellation or the preparation deadline, would leave blobs
-	// that no manifest references, so cleanup would never delete them.
-	copyCtx := context.WithoutCancel(ctx)
-	err = func() error {
-		m.copyMu.RLock()
-		defer m.copyMu.RUnlock()
-		if reference == "" {
-			return oras.CopyGraph(copyCtx, memStore, dst, root, copyOptions.CopyGraphOptions)
-		}
-		_, err := oras.Copy(copyCtx, memStore, root.Digest.String(), dst, reference, copyOptions)
-		return err
-	}()
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	chartsPrepared.Add(1)
-	return nil
+	layer := layerDescriptor(downloadUrl, digest.FromBytes(manifestData), int64(len(manifestData)))
+	return m.storeChart(ctx, path, chartVer, reference, chartMeta, layer, manifestData, "")
 }
 
 func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
@@ -480,6 +380,15 @@ func ParseIndex(data []byte) (*repo.IndexFile, error) {
 // openUpstream starts a GET to an upstream chart repository and returns the
 // body of a 2xx response.
 func (m *Manifests) openUpstream(ctx context.Context, rawURL string) (io.ReadCloser, error) {
+	return m.get(ctx, m.httpClient, rawURL)
+}
+
+// openLayer streams a chart layer to a client; see newLayerClient.
+func (m *Manifests) openLayer(ctx context.Context, rawURL string) (io.ReadCloser, error) {
+	return m.get(ctx, m.layerClient, rawURL)
+}
+
+func (m *Manifests) get(ctx context.Context, c *http.Client, rawURL string) (io.ReadCloser, error) {
 	if m.config.Debug {
 		m.log.Printf("downloading : %s\n", rawURL)
 	}
@@ -496,7 +405,7 @@ func (m *Manifests) openUpstream(ctx context.Context, rawURL string) (io.ReadClo
 	if err != nil {
 		return nil, err
 	}
-	resp, err := m.httpClient.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}

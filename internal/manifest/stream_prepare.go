@@ -2,27 +2,19 @@ package manifest
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
-	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	helmregistry "helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/repo"
-	"oras.land/oras-go/v2"
-	"oras.land/oras-go/v2/content"
-	"oras.land/oras-go/v2/content/memory"
 )
 
 type countingReader struct {
@@ -36,20 +28,23 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func hashOf(d digest.Digest) (v1.Hash, error) {
-	return v1.NewHash(d.String())
-}
-
 func upstreamError(format string, a ...any) *errors.RegError {
 	return &errors.RegError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: fmt.Sprintf(format, a...)}
 }
 
+func layerDescriptor(downloadURL string, d digest.Digest, size int64) ocispec.Descriptor {
+	return ocispec.Descriptor{
+		MediaType:   helmregistry.ChartLayerMediaType,
+		Digest:      d,
+		Size:        size,
+		Annotations: map[string]string{ocispec.AnnotationTitle: filepath.Clean(filepath.Base(downloadURL))},
+	}
+}
+
 // prepareStreamed builds the OCI manifest for a chart version from a single
 // streamed read of its tarball: the bytes are hashed and counted as they pass,
-// Chart.yaml is extracted on the way, and nothing but the config blob and the
-// manifest is kept. The layer is served later by streaming it from the
-// upstream again. The manifest is byte-identical to the one built from a fully
-// buffered tarball.
+// the chart is validated on the way, and only the config blob and the manifest
+// are kept. The layer is served later by streaming it from the upstream again.
 func (m *Manifests) prepareStreamed(ctx context.Context, path string, chartVer *repo.ChartVersion, downloadURL, reference string) *errors.RegError {
 	body, err := m.openUpstream(ctx, downloadURL)
 	if err != nil {
@@ -61,13 +56,20 @@ func (m *Manifests) prepareStreamed(ctx context.Context, path string, chartVer *
 	counter := &countingReader{r: io.LimitReader(body, maxDownloadSize+1)}
 	br := bufio.NewReader(io.TeeReader(counter, hasher))
 
+	magic, err := br.Peek(2)
+	if err != nil && err != io.EOF {
+		return upstreamError("reading upstream %s: %v", downloadURL, err)
+	}
 	// Some hosts answer 200 with an HTML page for missing files; packaging that
 	// would hand clients a chart that cannot be installed.
-	if magic, err := br.Peek(2); err != nil || !isGzip(magic) {
+	if !isGzip(magic) {
 		return upstreamError("upstream %s did not return a gzip chart archive", downloadURL)
 	}
 	chartMeta, err := readChartMetadata(br)
 	if err != nil {
+		if counter.n > maxDownloadSize {
+			return upstreamError("upstream %s response exceeds %d bytes", downloadURL, maxDownloadSize)
+		}
 		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadURL, err)
 	}
 	// The layer digest covers every byte, including what follows the tar end.
@@ -80,75 +82,6 @@ func (m *Manifests) prepareStreamed(ctx context.Context, path string, chartVer *
 	layerHex := hex.EncodeToString(hasher.Sum(nil))
 	m.checkIndexDigest(chartVer, layerHex)
 
-	configData, err := json.Marshal(chartMeta)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	packOpts := oras.PackOptions{
-		ManifestAnnotations: generateOCIAnnotations(chartMeta, getDeterministicCreatedTimestamp(chartVer)),
-	}
-	configDesc := ocispec.Descriptor{
-		MediaType:   helmregistry.ConfigMediaType,
-		Digest:      digest.FromBytes(configData),
-		Size:        int64(len(configData)),
-		Annotations: map[string]string{ocispec.AnnotationTitle: "$config"},
-	}
-	memStore := memory.New()
-	if err := memStore.Push(ctx, configDesc, bytes.NewReader(configData)); err != nil {
-		return errors.RegErrInternal(err)
-	}
-	configDesc.Annotations = packOpts.ConfigAnnotations
-	packOpts.ConfigDescriptor = &configDesc
-	packOpts.PackImageManifest = true
-
-	layerDesc := ocispec.Descriptor{
-		MediaType:   helmregistry.ChartLayerMediaType,
-		Digest:      digest.NewDigestFromEncoded(digest.SHA256, layerHex),
-		Size:        counter.n,
-		Annotations: map[string]string{ocispec.AnnotationTitle: filepath.Clean(filepath.Base(downloadURL))},
-	}
-	// Pack only marshals descriptors; the layer content is never needed here.
-	root, err := oras.Pack(ctx, memStore, "", []ocispec.Descriptor{layerDesc}, packOpts)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	manifestJSON, err := content.FetchAll(ctx, memStore, root)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-
-	put, ok := m.blobHandler.(handler.BlobPutHandler)
-	if !ok {
-		return errors.RegErrInternal(fmt.Errorf("blob handler does not accept writes"))
-	}
-	configHash, err := hashOf(configDesc.Digest)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	// Same exclusion as the buffered copy: cleanup must not delete the config
-	// blob between this Put and the manifest Write that references it.
-	m.copyMu.RLock()
-	defer m.copyMu.RUnlock()
-	if err := put.Put(ctx, "", configHash, io.NopCloser(bytes.NewReader(configData))); err != nil {
-		return errors.RegErrInternal(err)
-	}
-	m.blobs.addSource(layerDesc.Digest, downloadURL, layerDesc.Size)
-
-	repoKey := fmt.Sprintf("%s/%s", path, chartVer.Name)
-	ma := Manifest{
-		ContentType: root.MediaType,
-		Blob:        manifestJSON,
-		Refs:        []string{configDesc.Digest.String(), layerDesc.Digest.String()},
-		CreatedAt:   time.Now(),
-	}
-	if err := m.Write(repoKey, root.Digest.String(), ma); err != nil {
-		return errors.RegErrInternal(err)
-	}
-	if reference != "" {
-		if err := m.Write(repoKey, reference, ma); err != nil {
-			return errors.RegErrInternal(err)
-		}
-	}
-	chartsPrepared.Add(1)
-	return nil
+	layer := layerDescriptor(downloadURL, digest.NewDigestFromEncoded(digest.SHA256, layerHex), counter.n)
+	return m.storeChart(ctx, path, chartVer, reference, chartMeta, layer, nil, downloadURL)
 }

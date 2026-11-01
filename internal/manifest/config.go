@@ -8,8 +8,8 @@ type Config struct {
 	IndexCacheTTL      time.Duration
 	IndexCacheMaxCost  int64 // ristretto MaxCost of the index cache
 	IndexErrorCacheTTl time.Duration
-	// PrepareConcurrency bounds chart preparations running at once; each buffers
-	// its tarball. Zero means the default.
+	// PrepareConcurrency bounds chart preparations running at once. Zero means
+	// the default.
 	PrepareConcurrency int
 
 	// AllowPrivateNetworks permits upstream downloads from private, loopback,

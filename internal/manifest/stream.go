@@ -13,7 +13,6 @@ import (
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
-	"sigs.k8s.io/yaml"
 )
 
 var (
@@ -21,11 +20,11 @@ var (
 	utf8BOM        = []byte{0xEF, 0xBB, 0xBF}
 )
 
-// readChartMetadata reads a chart archive once and returns the metadata that
-// loader.LoadArchive would produce, holding only Chart.yaml and
-// requirements.yaml in memory. Every entry is checked against helm's path and
-// size rules (loader.LoadArchiveFiles); content that does not feed
-// chart.Metadata (loader.LoadFiles) is discarded as it streams past.
+// readChartMetadata reads a chart archive once and returns the metadata
+// loader.LoadArchive would produce, rejecting every chart it rejects. Each
+// entry is checked against helm's path and size rules (loader.LoadArchiveFiles),
+// and every file loader.LoadFiles parses is handed to it. Templates and other
+// files LoadFiles only stores are discarded as they stream past.
 func readChartMetadata(r io.Reader) (*chart.Metadata, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
@@ -35,7 +34,7 @@ func readChartMetadata(r io.Reader) (*chart.Metadata, error) {
 
 	tr := tar.NewReader(zr)
 	remaining := loader.MaxDecompressedChartSize
-	var chartYAMLs, requirements [][]byte
+	var parsed []*loader.BufferedFile
 	files := 0
 	for {
 		hd, err := tr.Next()
@@ -84,7 +83,7 @@ func readChartMetadata(r io.Reader) (*chart.Metadata, error) {
 
 		var buf bytes.Buffer
 		var w io.Writer = io.Discard
-		keep := n == "Chart.yaml" || n == "requirements.yaml"
+		keep := parsedByLoader(n)
 		if keep {
 			w = &buf
 		}
@@ -97,47 +96,26 @@ func readChartMetadata(r io.Reader) (*chart.Metadata, error) {
 			return nil, fmt.Errorf("decompressed chart is larger than the maximum file size %d", loader.MaxDecompressedChartSize)
 		}
 		files++
-		if !keep {
-			continue
-		}
-		data := bytes.TrimPrefix(buf.Bytes(), utf8BOM)
-		if n == "Chart.yaml" {
-			chartYAMLs = append(chartYAMLs, data)
-		} else {
-			requirements = append(requirements, data)
+		if keep {
+			parsed = append(parsed, &loader.BufferedFile{Name: n, Data: bytes.TrimPrefix(buf.Bytes(), utf8BOM)})
 		}
 	}
 	if files == 0 {
 		return nil, stderrors.New("no files in chart archive")
 	}
-
-	// Same order as loader.LoadFiles: every Chart.yaml first, then
-	// requirements.yaml unmarshalled on top of it.
-	var md *chart.Metadata
-	for _, data := range chartYAMLs {
-		if md == nil {
-			md = new(chart.Metadata)
-		}
-		if err := yaml.Unmarshal(data, md); err != nil {
-			return nil, fmt.Errorf("cannot load Chart.yaml: %w", err)
-		}
-		if md.APIVersion == "" {
-			md.APIVersion = chart.APIVersionV1
-		}
-	}
-	for _, data := range requirements {
-		if md == nil {
-			md = new(chart.Metadata)
-		}
-		if err := yaml.Unmarshal(data, md); err != nil {
-			return nil, fmt.Errorf("cannot load requirements.yaml: %w", err)
-		}
-	}
-	if md == nil {
-		return nil, stderrors.New("Chart.yaml file is missing")
-	}
-	if err := md.Validate(); err != nil {
+	ch, err := loader.LoadFiles(parsed)
+	if err != nil {
 		return nil, err
 	}
-	return md, nil
+	return ch.Metadata, nil
+}
+
+// parsedByLoader reports whether loader.LoadFiles parses the file, so that a
+// broken one makes helm reject the chart.
+func parsedByLoader(name string) bool {
+	switch name {
+	case "Chart.yaml", "Chart.lock", "values.yaml", "requirements.yaml", "requirements.lock":
+		return true
+	}
+	return strings.HasPrefix(name, "charts/")
 }

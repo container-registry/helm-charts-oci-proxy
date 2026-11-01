@@ -33,7 +33,8 @@ func (m *Manifests) manifest(ctx context.Context, repo, target string, opts Rewr
 
 // prepare runs prepareChart once per (repo, reference), however many requests
 // ask for it at the same time, and at most PrepareConcurrency at once because
-// each one buffers its tarball.
+// each one holds an upstream connection and, when dependencies are rewritten,
+// the whole tarball.
 func (m *Manifests) prepare(ctx context.Context, repo, reference string, opts RewriteOptions) *errors.RegError {
 	key := repo + "\x00" + reference
 	if rerr := m.failures.get(key); rerr != nil {

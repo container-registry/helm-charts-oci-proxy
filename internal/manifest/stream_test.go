@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -26,6 +27,8 @@ type streamFixture struct {
 	tgz       []byte
 	downloads *atomic.Int32
 	serve     *atomic.Value // []byte served for the tarball
+	status    atomic.Int32  // non-zero: answer the tarball with this status
+	delay     atomic.Int64  // pause in the middle of the tarball body
 }
 
 func newStreamFixture(t *testing.T) *streamFixture {
@@ -39,12 +42,24 @@ func newStreamFixture(t *testing.T) *streamFixture {
 	})
 	mux.HandleFunc("/demo-1.0.0.tgz", func(w http.ResponseWriter, _ *http.Request) {
 		f.downloads.Add(1)
-		_, _ = w.Write(f.serve.Load().([]byte))
+		if code := f.status.Load(); code != 0 {
+			w.WriteHeader(int(code))
+			return
+		}
+		data := f.serve.Load().([]byte)
+		if d := time.Duration(f.delay.Load()); d > 0 {
+			_, _ = w.Write(data[:len(data)/2])
+			w.(http.Flusher).Flush()
+			time.Sleep(d)
+			data = data[len(data)/2:]
+		}
+		_, _ = w.Write(data)
 	})
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 	f.m = NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 	f.m.httpClient = srv.Client()
+	f.m.layerClient = newLayerClient(srv.Client())
 	f.repo = strings.TrimPrefix(srv.URL, "https://") + "/demo"
 	return f
 }

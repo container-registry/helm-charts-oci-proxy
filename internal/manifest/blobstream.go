@@ -24,59 +24,87 @@ type layerSource struct {
 
 // streamBlobs serves chart layers straight from their upstream URL, verified
 // against the digest computed when the manifest was prepared, so tarballs are
-// never held in memory. Everything else (config blobs, rewritten charts) is
-// delegated to the local handler.
+// never held in memory. Blobs stored locally (config blobs, rewritten charts)
+// are served from the local handler first.
 type streamBlobs struct {
-	local   handler.BlobHandler
-	open    func(ctx context.Context, url string) (io.ReadCloser, error)
-	mu      sync.RWMutex
-	sources map[string]layerSource
+	local handler.BlobHandler
+	open  func(ctx context.Context, url string) (io.ReadCloser, error)
+	mu    sync.RWMutex
+	// Identical tarballs published by several repositories share a digest;
+	// every URL is kept so one upstream going away does not break the others.
+	sources map[string][]layerSource
 }
 
 func newStreamBlobs(local handler.BlobHandler, open func(context.Context, string) (io.ReadCloser, error)) *streamBlobs {
-	return &streamBlobs{local: local, open: open, sources: map[string]layerSource{}}
+	return &streamBlobs{local: local, open: open, sources: map[string][]layerSource{}}
 }
 
 func (s *streamBlobs) addSource(d digest.Digest, url string, size int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sources[d.String()] = layerSource{url: url, size: size}
+	for _, src := range s.sources[d.String()] {
+		if src.url == url {
+			return
+		}
+	}
+	s.sources[d.String()] = append(s.sources[d.String()], layerSource{url: url, size: size})
 }
 
-func (s *streamBlobs) source(h v1.Hash) (layerSource, bool) {
+func (s *streamBlobs) sourcesOf(h v1.Hash) []layerSource {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	src, ok := s.sources[h.String()]
-	return src, ok
+	return append([]layerSource(nil), s.sources[h.String()]...)
 }
 
 func (s *streamBlobs) Stat(ctx context.Context, repo string, h v1.Hash) (int64, error) {
-	if src, ok := s.source(h); ok {
-		return src.size, nil
+	size, err := s.localSize(ctx, repo, h)
+	if !stderrors.Is(err, blobs.ErrNotFound) {
+		return size, err
 	}
-	if st, ok := s.local.(handler.BlobStatHandler); ok {
-		return st.Stat(ctx, repo, h)
+	if srcs := s.sourcesOf(h); len(srcs) > 0 {
+		return srcs[0].size, nil
 	}
 	return 0, blobs.ErrNotFound
 }
 
-func (s *streamBlobs) Get(ctx context.Context, repo string, h v1.Hash) (io.ReadCloser, error) {
-	src, ok := s.source(h)
-	if !ok {
-		return s.local.Get(ctx, repo, h)
+func (s *streamBlobs) localSize(ctx context.Context, repo string, h v1.Hash) (int64, error) {
+	if st, ok := s.local.(handler.BlobStatHandler); ok {
+		return st.Stat(ctx, repo, h)
 	}
-	rc, err := s.open(ctx, src.url)
+	rc, err := s.local.Get(ctx, repo, h)
 	if err != nil {
-		var se *upstreamStatusError
-		if stderrors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone) {
-			return nil, blobs.ErrNotFound
-		}
-		return nil, err
+		return 0, err
 	}
-	blobsStreamed.Add(1)
-	// A republished upstream file fails here at EOF; the blob handler then
-	// aborts the response instead of completing it.
-	return verify.ReadCloser(rc, src.size, h)
+	defer rc.Close()
+	return io.Copy(io.Discard, rc)
+}
+
+func (s *streamBlobs) Get(ctx context.Context, repo string, h v1.Hash) (io.ReadCloser, error) {
+	rc, err := s.local.Get(ctx, repo, h)
+	if !stderrors.Is(err, blobs.ErrNotFound) {
+		return rc, err
+	}
+	srcs := s.sourcesOf(h)
+	if len(srcs) == 0 {
+		return nil, blobs.ErrNotFound
+	}
+	var lastErr error
+	for _, src := range srcs {
+		body, err := s.open(ctx, src.url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		blobsStreamed.Add(1)
+		// A republished upstream file fails at EOF; the blob handler then drops
+		// the connection before the last byte instead of completing the body.
+		return verify.ReadCloser(body, src.size, h)
+	}
+	var se *upstreamStatusError
+	if stderrors.As(lastErr, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone) {
+		return nil, blobs.ErrNotFound
+	}
+	return nil, downloadError(lastErr, "BLOB_UNKNOWN")
 }
 
 func (s *streamBlobs) Put(ctx context.Context, repo string, h v1.Hash, rc io.ReadCloser) error {
@@ -88,6 +116,8 @@ func (s *streamBlobs) Put(ctx context.Context, repo string, h v1.Hash, rc io.Rea
 	return p.Put(ctx, repo, h, rc)
 }
 
+// Delete is only called by cleanup once no live manifest references the
+// digest, so every source of it can go.
 func (s *streamBlobs) Delete(ctx context.Context, repo string, h v1.Hash) error {
 	s.mu.Lock()
 	_, had := s.sources[h.String()]
