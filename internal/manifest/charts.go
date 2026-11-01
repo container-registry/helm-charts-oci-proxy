@@ -254,7 +254,11 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 				// cache error too to avoid external resource exhausting
 				ttl = m.config.IndexErrorCacheTTL
 			}
-			m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+			// ristretto keeps an entry with TTL 0 forever; for errors 0 means
+			// do not cache.
+			if res.err == nil || ttl > 0 {
+				m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+			}
 			// ristretto applies writes asynchronously; without waiting, a request
 			// right after this flight ends would miss and parse the index again.
 			if w, ok := m.cache.(interface{ Wait() }); ok {

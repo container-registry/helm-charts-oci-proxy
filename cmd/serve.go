@@ -178,8 +178,8 @@ func loadServeConfig() (serveConfig, error) {
 	c := serveConfig{
 		port:                 r.int("PORT", 9000, 1, 65535),
 		debug:                r.bool("DEBUG", false),
-		manifestCacheTTL:     r.seconds("MANIFEST_CACHE_TTL", 60, 0),
-		indexCacheTTL:        r.seconds("INDEX_CACHE_TTL", 4*3600, 0),
+		manifestCacheTTL:     r.seconds("MANIFEST_CACHE_TTL", 60, 1),
+		indexCacheTTL:        r.seconds("INDEX_CACHE_TTL", 4*3600, 1),
 		indexCacheMiB:        r.int("INDEX_CACHE_SIZE_MIB", 128, 1, maxIndexCacheMiB),
 		indexErrorCacheTTL:   r.seconds("INDEX_ERROR_CACHE_TTL", 30, 0),
 		prepareConcurrency:   r.int("PREPARE_CONCURRENCY", manifest.DefaultPrepareConcurrency, 1, math.MaxInt),

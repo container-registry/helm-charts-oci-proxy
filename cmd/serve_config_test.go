@@ -52,7 +52,7 @@ func TestLoadServeConfigRejectsInvalidValues(t *testing.T) {
 		})
 	}
 	for key, v := range map[string]string{
-		"PREPARE_CONCURRENCY": "0", "SHUTDOWN_TIMEOUT": "0", "MANIFEST_CACHE_TTL": "-1",
+		"PREPARE_CONCURRENCY": "0", "SHUTDOWN_TIMEOUT": "0", "MANIFEST_CACHE_TTL": "0", "INDEX_CACHE_TTL": "0", "INDEX_ERROR_CACHE_TTL": "-1",
 		"PORT": "0", "PORT ": "65536", "INDEX_CACHE_SIZE_MIB": "0", "INDEX_CACHE_SIZE_MIB ": strconv.Itoa(maxIndexCacheMiB + 1),
 	} {
 		key := strings.TrimSpace(key)
@@ -101,5 +101,14 @@ func TestLoadServeConfigReportsAllErrors(t *testing.T) {
 	_, err := loadServeConfig()
 	if err == nil || !strings.Contains(err.Error(), "PORT") || !strings.Contains(err.Error(), "INDEX_CACHE_SIZE_MIB") {
 		t.Fatalf("err = %v, want both PORT and INDEX_CACHE_SIZE_MIB", err)
+	}
+}
+
+func TestLoadServeConfigAcceptsZeroIndexErrorCacheTTL(t *testing.T) {
+	clearServeEnv(t)
+	t.Setenv("INDEX_ERROR_CACHE_TTL", "0")
+	c, err := loadServeConfig()
+	if err != nil || c.indexErrorCacheTTL != 0 {
+		t.Fatalf("indexErrorCacheTTL %v, err %v", c.indexErrorCacheTTL, err)
 	}
 }

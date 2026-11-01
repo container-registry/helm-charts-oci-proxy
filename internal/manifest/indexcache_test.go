@@ -44,7 +44,7 @@ func TestGetIndex_ParseFailureIsChargedAsError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	cc := &costCache{costs: map[interface{}]int64{}}
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexCacheMaxCost: 128 << 20}, cc, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexCacheMaxCost: 128 << 20, IndexErrorCacheTTL: time.Minute}, cc, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	host := strings.TrimPrefix(srv.URL, "https://")
 	if _, err := m.GetIndex(host); err == nil {
