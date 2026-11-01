@@ -15,6 +15,11 @@ import (
 // SSRF gateway (cloud metadata endpoints, cluster-internal services). The check
 // runs at dial time, after DNS resolution, so it also covers redirects and DNS
 // rebinding.
+// policyError marks a download the proxy refused on purpose.
+type policyError struct{ msg string }
+
+func (e *policyError) Error() string { return e.msg }
+
 func newDownloadClient(allowPrivate bool) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
@@ -24,10 +29,10 @@ func newDownloadClient(allowPrivate bool) *http.Client {
 		dialer.Control = func(_, address string, _ syscall.RawConn) error {
 			ap, err := netip.ParseAddrPort(address)
 			if err != nil {
-				return fmt.Errorf("refusing to dial unparsable address %q: %w", address, err)
+				return &policyError{fmt.Sprintf("refusing to dial unparsable address %q: %v", address, err)}
 			}
 			if !isPublicAddr(ap.Addr()) {
-				return fmt.Errorf("refusing to dial non-public address %s (set ALLOW_PRIVATE_NETWORKS=true to permit)", ap.Addr())
+				return &policyError{fmt.Sprintf("refusing to dial non-public address %s (set ALLOW_PRIVATE_NETWORKS=true to permit)", ap.Addr())}
 			}
 			return nil
 		}
@@ -39,7 +44,7 @@ func newDownloadClient(allowPrivate bool) *http.Client {
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if req.URL.Scheme != "https" {
-				return fmt.Errorf("refusing redirect to non-https URL %q", req.URL)
+				return &policyError{fmt.Sprintf("refusing redirect to non-https URL %q", req.URL)}
 			}
 			// A non-nil CheckRedirect replaces the client's default 10-hop limit.
 			if len(via) >= 10 {

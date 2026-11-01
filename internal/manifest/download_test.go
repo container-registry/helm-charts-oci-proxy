@@ -8,8 +8,10 @@ import (
 	stderrors "errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -134,6 +136,8 @@ func TestPrepareChart_IndexDigestMismatchIsObservedOnly(t *testing.T) {
 		{"matching with prefix", "sha256:" + hex.EncodeToString(sum[:]), 0},
 		{"stale", strings.Repeat("0", 64), 1},
 		{"absent", "", 0},
+		{"uppercase prefix", "SHA256:" + hex.EncodeToString(sum[:]), 0},
+		{"other algorithm", "sha512:" + strings.Repeat("0", 128), 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, repo := chartServer(t, tc.digest, serve)
@@ -149,5 +153,53 @@ func TestPrepareChart_IndexDigestMismatchIsObservedOnly(t *testing.T) {
 				t.Errorf("chart_digest_mismatches grew by %d, want %d", got, tc.mismatch)
 			}
 		})
+	}
+}
+
+func TestDownloadError_Mapping(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"upstream 404", &upstreamStatusError{status: http.StatusNotFound}, http.StatusNotFound},
+		{"upstream 503", &upstreamStatusError{status: http.StatusServiceUnavailable}, http.StatusBadGateway},
+		{"unknown host", &url.Error{Op: "Get", Err: &net.DNSError{IsNotFound: true}}, http.StatusNotFound},
+		{"private dial refused", &url.Error{Op: "Get", Err: &net.OpError{Op: "dial", Err: &policyError{"refusing"}}}, http.StatusForbidden},
+		{"timeout", &url.Error{Op: "Get", Err: stderrors.New("timeout")}, http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := downloadError(tc.err, "NAME_UNKNOWN").Status; got != tc.want {
+				t.Errorf("status = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// Before, an index fetch failure of any kind answered 404, so an upstream
+// outage looked like a repository that does not exist.
+func TestPrepareChart_IndexOutageIsBadGateway(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m.httpClient = srv.Client()
+	_, err := getManifest(t, m, strings.TrimPrefix(srv.URL, "https://")+"/demo")
+	if got := regStatus(t, err); got != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502 (%v)", got, err)
+	}
+}
+
+func TestDownload_BodyIsBounded(t *testing.T) {
+	old := maxDownloadSize
+	maxDownloadSize = 1 << 10
+	t.Cleanup(func() { maxDownloadSize = old })
+	m, repo := chartServer(t, "", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte{0x1f}, 2<<10))
+	})
+	_, err := getManifest(t, m, repo)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected size limit error, got %v", err)
 	}
 }
