@@ -228,3 +228,31 @@ func TestStreamBlobs_StatFallsBackToGet(t *testing.T) {
 		t.Fatalf("Stat = %d, %v; want %d", size, err, len(data))
 	}
 }
+
+// A source that serves the wrong bytes after a 200 cannot be switched mid
+// response; the next request must go to another source instead.
+func TestStreamBlobs_MismatchingSourceIsTriedLast(t *testing.T) {
+	data := []byte("shared tarball")
+	h, _, _ := v1.SHA256(bytes.NewReader(data))
+	s := newStreamBlobs(mem.NewMemHandler(), fakeOpen(map[string][]byte{
+		"https://a/x.tgz": []byte("republished!!!"),
+		"https://b/x.tgz": data,
+	}))
+	s.addSource(digestOf(h), "https://a/x.tgz", int64(len(data)))
+	s.addSource(digestOf(h), "https://b/x.tgz", int64(len(data)))
+	read := func() error {
+		rc, err := s.Get(t.Context(), "", h)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		_, err = io.ReadAll(rc)
+		return err
+	}
+	if err := read(); err == nil {
+		t.Fatal("first read of the mismatching source succeeded")
+	}
+	if err := read(); err != nil {
+		t.Fatalf("retry was not served by the other source: %v", err)
+	}
+}

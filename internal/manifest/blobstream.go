@@ -96,9 +96,16 @@ func (s *streamBlobs) Get(ctx context.Context, repo string, h v1.Hash) (io.ReadC
 			continue
 		}
 		blobsStreamed.Add(1)
+		vrc, err := verify.ReadCloser(body, src.size, h)
+		if err != nil {
+			body.Close()
+			return nil, err
+		}
 		// A republished upstream file fails at EOF; the blob handler then drops
 		// the connection before the last byte instead of completing the body.
-		return verify.ReadCloser(body, src.size, h)
+		// The status is already sent by then, so the source moves to the back
+		// and the client's retry is served by the next one.
+		return &demoteOnMismatch{ReadCloser: vrc, demote: func() { s.demote(h, src.url) }}, nil
 	}
 	var se *upstreamStatusError
 	if stderrors.As(lastErr, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone) {
@@ -132,4 +139,31 @@ func (s *streamBlobs) Delete(ctx context.Context, repo string, h v1.Hash) error 
 		return nil
 	}
 	return err
+}
+
+func (s *streamBlobs) demote(h v1.Hash, url string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	srcs := s.sources[h.String()]
+	for i, src := range srcs {
+		if src.url == url {
+			s.sources[h.String()] = append(append(srcs[:i:i], srcs[i+1:]...), src)
+			return
+		}
+	}
+}
+
+type demoteOnMismatch struct {
+	io.ReadCloser
+	demote func()
+	once   sync.Once
+}
+
+func (d *demoteOnMismatch) Read(p []byte) (int, error) {
+	n, err := d.ReadCloser.Read(p)
+	var ve verify.Error
+	if stderrors.As(err, &ve) {
+		d.once.Do(d.demote)
+	}
+	return n, err
 }
