@@ -106,6 +106,8 @@ func (s *memStats) finish(target string) {
 	if raw, err := exec.Command("docker", "inspect", name, "--format", "{{.State.OOMKilled}}").Output(); err == nil {
 		b := strings.TrimSpace(string(raw)) == "true"
 		s.OOMKilled = &b
+	} else {
+		s.Errors = append(s.Errors, "OOMKilled: "+err.Error())
 	}
 }
 
@@ -205,13 +207,8 @@ func (r *Report) markdown() string {
 		versions = "every version in the index"
 	}
 	fmt.Fprintf(&b, "- Checked: %d charts (%s), concurrency %d, %d per repository host\n", len(r.Results), versions, r.Concurrency, r.PerHost)
-	m := r.Memory
-	fmt.Fprintf(&b, "- Proxy memory: peak working set %.1f MiB (sampled every 500ms, %d samples), cgroup memory.peak %.1f MiB, peak Go heap in use %.1f MiB, peak Go Sys %.1f MiB",
-		m.PeakWorkingSetMiB, m.Samples, m.CgroupPeakMiB, m.PeakHeapInuseMiB, m.PeakGoSysMiB)
-	if m.OOMKilled != nil {
-		fmt.Fprintf(&b, ", OOM killed: %v", *m.OOMKilled)
-	}
-	b.WriteString("\n\n| Class | Count |\n|---|---|\n")
+	fmt.Fprintf(&b, "- Proxy memory: %s\n", r.Memory.summary())
+	b.WriteString("\n| Class | Count |\n|---|---|\n")
 	counts := r.classCounts()
 	for _, c := range classOrder {
 		fmt.Fprintf(&b, "| %s | %d |\n", c, counts[c])
@@ -275,6 +272,31 @@ func (r *Report) markdown() string {
 		}
 	}
 	return b.String()
+}
+
+// summary lists only the figures that were measured; a zero peak means the
+// source was not sampled, not that the proxy used no memory.
+func (m *memStats) summary() string {
+	var parts []string
+	add := func(v float64, format string, a ...any) {
+		if v > 0 {
+			parts = append(parts, fmt.Sprintf(format, a...))
+		}
+	}
+	add(m.PeakWorkingSetMiB, "peak working set %.1f MiB (sampled every 500ms, %d samples)", m.PeakWorkingSetMiB, m.Samples)
+	add(m.CgroupPeakMiB, "cgroup memory.peak %.1f MiB", m.CgroupPeakMiB)
+	add(m.PeakHeapInuseMiB, "peak Go heap in use %.1f MiB", m.PeakHeapInuseMiB)
+	add(m.PeakGoSysMiB, "peak Go Sys %.1f MiB", m.PeakGoSysMiB)
+	if m.OOMKilled != nil {
+		parts = append(parts, fmt.Sprintf("OOM killed: %v", *m.OOMKilled))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "not measured (pass -target docker:<container> and/or -diag)")
+	}
+	if len(m.Errors) > 0 {
+		parts = append(parts, fmt.Sprintf("%d sampling errors, first: %s", len(m.Errors), oneLine(m.Errors[0], 200)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func cell(s string) string {
