@@ -6,22 +6,23 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
-
-	"golang.org/x/sync/singleflight"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 )
 
 type Catalog struct {
@@ -42,10 +43,15 @@ type Manifest struct {
 
 type Manifests struct {
 	// maps repo -> Manifest tag/digest -> Manifest
-	manifests   map[string]map[string]Manifest
-	mu          sync.RWMutex // guards manifests only, never held during network I/O
+	manifests map[string]map[string]Manifest
+	mu        sync.RWMutex // guards manifests; never held during network I/O
+	// copyMu keeps cleanup from deleting content-addressed blobs that a
+	// preparation has just Put but not yet referenced from a manifest.
+	copyMu      sync.RWMutex
 	prepares    singleflight.Group
 	indexes     singleflight.Group
+	slots       chan struct{}
+	failures    *failureCache
 	log         logrus.StdLogger
 	cache       Cache
 	blobHandler handler.BlobHandler
@@ -54,14 +60,19 @@ type Manifests struct {
 }
 
 func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
+	concurrency := config.PrepareConcurrency
+	if concurrency <= 0 {
+		concurrency = defaultPrepareConcurrency
+	}
 	ma := &Manifests{
-
 		manifests:   map[string]map[string]Manifest{},
 		blobHandler: blobHandler,
 		log:         log,
 		config:      config,
 		cache:       cache,
 		httpClient:  newDownloadClient(config.AllowPrivateNetworks),
+		slots:       make(chan struct{}, concurrency),
+		failures:    newFailureCache(config.IndexErrorCacheTTl),
 	}
 
 	go func() {
@@ -70,33 +81,7 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		for {
 			select {
 			case <-ticker.C:
-				if ma.config.Debug {
-					ma.log.Println("cleanup cycle")
-				}
-				ma.mu.Lock()
-				for _, m := range ma.manifests {
-					for k, v := range m {
-						if v.CreatedAt.Before(time.Now().Add(-ma.config.CacheTTL)) {
-							// delete
-							delete(m, k)
-							if delHandler, ok := ma.blobHandler.(handler.BlobDeleteHandler); ok {
-								for _, ref := range v.Refs {
-									h, err := v1.NewHash(ref)
-									if err != nil {
-										continue
-									}
-									if ma.config.Debug {
-										log.Printf("deleting blob %s", h.String())
-									}
-									if err = delHandler.Delete(ctx, "", h); err != nil {
-										log.Println(err)
-									}
-								}
-							}
-						}
-					}
-				}
-				ma.mu.Unlock()
+				ma.cleanup(ctx)
 			case <-ctx.Done():
 				return
 			}
@@ -104,6 +89,58 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 	}()
 
 	return ma
+}
+
+// cleanup drops expired manifests. A blob is deleted only when no remaining
+// manifest references it: the digest and tag entries of one chart, and charts
+// that share a tarball, reference the same content-addressed blobs.
+func (m *Manifests) cleanup(ctx context.Context) {
+	if m.config.Debug {
+		m.log.Println("cleanup cycle")
+	}
+	m.copyMu.Lock()
+	defer m.copyMu.Unlock()
+
+	cutoff := time.Now().Add(-m.config.CacheTTL)
+	expired := map[string]struct{}{}
+	live := map[string]struct{}{}
+	m.mu.Lock()
+	for repo, entries := range m.manifests {
+		for k, v := range entries {
+			refs := live
+			if v.CreatedAt.Before(cutoff) {
+				delete(entries, k)
+				refs = expired
+			}
+			for _, r := range v.Refs {
+				refs[r] = struct{}{}
+			}
+		}
+		if len(entries) == 0 {
+			delete(m.manifests, repo)
+		}
+	}
+	m.mu.Unlock()
+
+	del, ok := m.blobHandler.(handler.BlobDeleteHandler)
+	if !ok {
+		return
+	}
+	for ref := range expired {
+		if _, inUse := live[ref]; inUse {
+			continue
+		}
+		h, err := v1.NewHash(ref)
+		if err != nil {
+			continue
+		}
+		if m.config.Debug {
+			m.log.Printf("deleting blob %s", h.String())
+		}
+		if err := del.Delete(ctx, "", h); err != nil && !stderrors.Is(err, blobs.ErrNotFound) {
+			m.log.Println(err)
+		}
+	}
 }
 
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
@@ -236,7 +273,7 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 
 	if !fromIndex {
 		names := m.names(fullRepo)
-		if names == nil {
+		if len(names) == 0 {
 			if err := m.prepare(req.Context(), fullRepo, "", rewriteOpts); err != nil {
 				return err
 			}

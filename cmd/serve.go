@@ -68,6 +68,10 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				l.Fatalln(fmt.Errorf("INDEX_CACHE_SIZE_MIB: %w", err))
 			}
 			indexErrorCacheTTL, _ := env.GetInt("INDEX_ERROR_CACHE_TTL", 30) // 30 seconds
+			prepareConcurrency, err := env.GetInt("PREPARE_CONCURRENCY", 4)
+			if err != nil || prepareConcurrency < 1 {
+				l.Fatalln(fmt.Errorf("PREPARE_CONCURRENCY must be a positive integer: %v", err))
+			}
 
 			rewriteDeps, _ := env.GetBool("REWRITE_DEPENDENCIES", false)
 			proxyHost := env.GetString("PROXY_HOST", "")
@@ -115,6 +119,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				IndexCacheTTL:        time.Duration(indexCacheTTL) * time.Second,
 				IndexCacheMaxCost:    int64(indexCacheMiB) << 20,
 				IndexErrorCacheTTl:   time.Duration(indexErrorCacheTTL) * time.Second,
+				PrepareConcurrency:   prepareConcurrency,
 				RewriteDependencies:  rewriteDeps,
 				ProxyHost:            proxyHost,
 				AllowPrivateNetworks: allowPrivateNetworks,

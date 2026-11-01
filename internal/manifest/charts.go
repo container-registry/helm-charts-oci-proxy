@@ -300,13 +300,21 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return nil
 	}
 
-	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), m.blobHandler.(handler.BlobPutHandler), m)
-	// push
-	if reference == "" {
-		err = oras.CopyGraph(ctx, memStore, dst, root, copyOptions.CopyGraphOptions)
-	} else {
-		_, err = oras.Copy(ctx, memStore, root.Digest.String(), dst, reference, copyOptions)
+	put, ok := m.blobHandler.(handler.BlobPutHandler)
+	if !ok {
+		return errors.RegErrInternal(fmt.Errorf("blob handler does not accept writes"))
 	}
+	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), put, m)
+	// The copy is memory to memory. Cancelling it halfway would leave blobs that
+	// no manifest references, so cleanup would never delete them.
+	copyCtx := context.WithoutCancel(ctx)
+	m.copyMu.RLock()
+	if reference == "" {
+		err = oras.CopyGraph(copyCtx, memStore, dst, root, copyOptions.CopyGraphOptions)
+	} else {
+		_, err = oras.Copy(copyCtx, memStore, root.Digest.String(), dst, reference, copyOptions)
+	}
+	m.copyMu.RUnlock()
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
@@ -326,6 +334,12 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 	if !ok || c == nil {
 		// Concurrent misses for one repository share a single download and parse.
 		v, _, _ := m.indexes.Do(repoURLPath, func() (interface{}, error) {
+			// A caller that missed just before an earlier flight finished.
+			if cached, ok := m.cache.Get(repoURLPath); ok {
+				if res, ok := cached.(*cacheResp); ok {
+					return res, nil
+				}
+			}
 			res := &cacheResp{}
 			var size int
 			res.c, size, res.err = m.downloadIndex(repoURLPath)
@@ -335,6 +349,11 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 				ttl = m.config.IndexErrorCacheTTl
 			}
 			m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+			// ristretto applies writes asynchronously; without waiting, a request
+			// right after this flight ends would miss and parse the index again.
+			if w, ok := m.cache.(interface{ Wait() }); ok {
+				w.Wait()
+			}
 			return res, nil
 		})
 		res := v.(*cacheResp)
