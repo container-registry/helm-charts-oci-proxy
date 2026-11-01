@@ -56,7 +56,21 @@ func TestIndexCacheAdmitsLargestIndex(t *testing.T) {
 		c.SetWithTTL(i, i, manifest.IndexCost(size, nil, mib<<20), time.Hour)
 	}
 	c.SetWithTTL("bitnami", "bitnami", manifest.IndexCost(27_563_919, nil, mib<<20), time.Hour)
-	// Larger than the whole budget: capped, so it is still admitted.
+	c.Wait()
+	if _, ok := c.Get("bitnami"); !ok {
+		t.Error("bitnami index was not admitted")
+	}
+}
+
+// An index larger than the whole budget is capped at the budget, so it is still
+// cached instead of being downloaded on every request.
+func TestIndexCacheAdmitsOversizedIndex(t *testing.T) {
+	const mib = 128
+	c, err := newIndexCache(mib, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
 	c.SetWithTTL("huge", "huge", manifest.IndexCost(200<<20, nil, mib<<20), time.Hour)
 	c.Wait()
 	if _, ok := c.Get("huge"); !ok {

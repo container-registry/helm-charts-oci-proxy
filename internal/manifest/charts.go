@@ -366,7 +366,9 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, int, err
 	}
 	idx, err := ParseIndex(data)
 	if err != nil {
-		return idx, 0, err
+		// ParseIndex can return a populated index with ErrNoAPIVersion; caching
+		// it at the error cost would hold an uncounted index.
+		return nil, 0, err
 	}
 	return idx, len(data), nil
 }

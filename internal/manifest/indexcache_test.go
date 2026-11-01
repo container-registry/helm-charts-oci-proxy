@@ -54,3 +54,21 @@ func TestGetIndex_ParseFailureIsChargedAsError(t *testing.T) {
 		t.Errorf("cost of failed parse = %d, want a small error cost", got)
 	}
 }
+
+// ParseIndex returns the parsed entries together with ErrNoAPIVersion; the
+// cached error entry must not keep them.
+func TestGetIndex_PartialIndexIsNotCached(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("apiVersion: \"\"\nentries:\n  demo:\n    - name: demo\n      version: 1.0.0\n      urls: [demo-1.0.0.tgz]\n"))
+	}))
+	t.Cleanup(srv.Close)
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexCacheMaxCost: 128 << 20}, &costCache{costs: map[interface{}]int64{}}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m.httpClient = srv.Client()
+	idx, err := m.GetIndex(strings.TrimPrefix(srv.URL, "https://"))
+	if err == nil {
+		t.Fatal("expected ErrNoAPIVersion")
+	}
+	if idx != nil {
+		t.Errorf("partial index with %d charts returned and cached alongside the error", len(idx.Entries))
+	}
+}
