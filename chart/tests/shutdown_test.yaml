@@ -1,0 +1,89 @@
+suite: graceful shutdown and rewrite validation
+templates:
+  - templates/deployment.yaml
+
+tests:
+  - it: should sleep in preStop and size the grace period by default
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command
+          value: ["sleep", "5"]
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 35
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SHUTDOWN_TIMEOUT
+            value: "25"
+
+  - it: should derive the grace period from preStop and SHUTDOWN_TIMEOUT
+    set:
+      shutdown.preStopSleepSeconds: 10
+      app.env_vars.SHUTDOWN_TIMEOUT: 50
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 65
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command
+          value: ["sleep", "10"]
+
+  - it: should use the proxy default when SHUTDOWN_TIMEOUT is empty
+    set:
+      app.env_vars.SHUTDOWN_TIMEOUT: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 35
+
+  - it: should omit the preStop hook when disabled
+    set:
+      shutdown.preStopSleepSeconds: 0
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].lifecycle
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 30
+
+  - it: should accept an explicit grace period that covers the drain
+    set:
+      shutdown.terminationGracePeriodSeconds: 120
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 120
+
+  - it: should reject an explicit grace period shorter than preStop plus drain
+    set:
+      shutdown.terminationGracePeriodSeconds: 20
+    asserts:
+      - failedTemplate:
+          errorPattern: "shutdown.terminationGracePeriodSeconds \\(20\\) must be at least"
+
+  - it: should fail when REWRITE_DEPENDENCIES is true without PROXY_HOST
+    set:
+      app.env_vars.REWRITE_DEPENDENCIES: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "PROXY_HOST is required"
+
+  - it: should fail when REWRITE_DEPENDENCIES is the string "true" and PROXY_HOST is blank
+    set:
+      app.env_vars.REWRITE_DEPENDENCIES: "true"
+      app.env_vars.PROXY_HOST: " "
+    asserts:
+      - failedTemplate:
+          errorPattern: "PROXY_HOST is required"
+
+  - it: should render when REWRITE_DEPENDENCIES is true with PROXY_HOST
+    set:
+      app.env_vars.REWRITE_DEPENDENCIES: true
+      app.env_vars.PROXY_HOST: chartproxy.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROXY_HOST
+            value: chartproxy.example.com

@@ -63,3 +63,33 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Fail rendering on settings the proxy refuses at startup.
+*/}}
+{{- define "ocip.validate" -}}
+{{- $env := .Values.app.env_vars }}
+{{- if has (lower (toString $env.REWRITE_DEPENDENCIES)) (list "1" "t" "true") }}
+{{- if not (trim (toString (default "" $env.PROXY_HOST))) }}
+{{- fail "app.env_vars.PROXY_HOST is required when app.env_vars.REWRITE_DEPENDENCIES is true" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+terminationGracePeriodSeconds: preStop sleep + SHUTDOWN_TIMEOUT + a margin,
+unless set explicitly. An empty SHUTDOWN_TIMEOUT selects the proxy default 25.
+*/}}
+{{- define "ocip.terminationGracePeriodSeconds" -}}
+{{- $preStop := int .Values.shutdown.preStopSleepSeconds }}
+{{- $drain := int (default 25 .Values.app.env_vars.SHUTDOWN_TIMEOUT) }}
+{{- $needed := add $preStop $drain }}
+{{- with .Values.shutdown.terminationGracePeriodSeconds }}
+{{- if lt (int .) $needed }}
+{{- fail (printf "shutdown.terminationGracePeriodSeconds (%d) must be at least shutdown.preStopSleepSeconds + app.env_vars.SHUTDOWN_TIMEOUT (%d)" (int .) $needed) }}
+{{- end }}
+{{- int . }}
+{{- else }}
+{{- add $needed 5 }}
+{{- end }}
+{{- end }}

@@ -1,3 +1,4 @@
+{{- include "ocip.validate" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,6 +33,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "ocip.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ include "ocip.terminationGracePeriodSeconds" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       volumes:
@@ -65,6 +67,12 @@ spec:
               path: /api/version
               port: http
               scheme: {{- if eq (lower (toString .Values.app.env_vars.USE_TLS)) "true" }} HTTPS {{ else }} HTTP {{- end }}
+          {{- if gt (int .Values.shutdown.preStopSleepSeconds) 0 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ int .Values.shutdown.preStopSleepSeconds }}"]
+          {{- end }}
           env:
             {{- range $key, $value := .Values.app.env_vars }}
             - name: {{ $key }}
