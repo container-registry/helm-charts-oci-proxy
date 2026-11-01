@@ -125,7 +125,7 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 				AllowPrivateNetworks: allowPrivateNetworks,
 			}, indexCache, l)
 
-			blobsHttpHandler := blobs.NewBlobs(blobsHandler, l)
+			blobsHttpHandler := blobs.NewBlobs(manifests.Blobs(), l)
 			//blobsHandler = file.NewHandler(dbLocation)
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter

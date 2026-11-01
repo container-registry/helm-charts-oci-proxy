@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	stderrors "errors"
 	"expvar"
@@ -191,6 +190,11 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	downloadUrl := u.String()
 
+	// Dependency rewriting changes the tarball, so only that path buffers it.
+	if !rewriteOpts.Enabled || rewriteOpts.ProxyHost == "" {
+		return m.prepareStreamed(ctx, path, chartVer, downloadUrl, reference)
+	}
+
 	manifestData, err := m.download(ctx, downloadUrl)
 	if err != nil {
 		return downloadError(err, "MANIFEST_UNKNOWN")
@@ -204,7 +208,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 			Message: fmt.Sprintf("upstream %s did not return a gzip chart archive", downloadUrl),
 		}
 	}
-	m.checkIndexDigest(chartVer, manifestData)
+	m.checkIndexDigest(chartVer, digest.FromBytes(manifestData).Encoded())
 
 	// A gzip header alone does not make a chart: a truncated archive or
 	// gzip-compressed HTML passes isGzip but cannot be installed.
@@ -473,7 +477,9 @@ func ParseIndex(data []byte) (*repo.IndexFile, error) {
 	return i, nil
 }
 
-func (m *Manifests) download(ctx context.Context, rawURL string) ([]byte, error) {
+// openUpstream starts a GET to an upstream chart repository and returns the
+// body of a 2xx response.
+func (m *Manifests) openUpstream(ctx context.Context, rawURL string) (io.ReadCloser, error) {
 	if m.config.Debug {
 		m.log.Printf("downloading : %s\n", rawURL)
 	}
@@ -494,13 +500,22 @@ func (m *Manifests) download(ctx context.Context, rawURL string) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		// Drain a bounded amount so the connection can be reused.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
 		return nil, &upstreamStatusError{url: rawURL, status: resp.StatusCode}
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
+	return resp.Body, nil
+}
+
+func (m *Manifests) download(ctx context.Context, rawURL string) ([]byte, error) {
+	body, err := m.openUpstream(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	data, err := io.ReadAll(io.LimitReader(body, maxDownloadSize+1))
 	if err != nil {
 		return nil, err
 	}
@@ -510,9 +525,9 @@ func (m *Manifests) download(ctx context.Context, rawURL string) ([]byte, error)
 	return data, nil
 }
 
-// maxDownloadSize bounds every upstream body held in memory. The largest index
-// seen in production (bitnami) is 27.5MB, and helm refuses charts that
-// decompress to more than 100MiB, so a larger body is never usable.
+// maxDownloadSize bounds every upstream body. The largest index seen in
+// production (bitnami) is 27.5MB, and helm refuses charts that decompress to
+// more than 100MiB, so a larger body is never usable.
 var maxDownloadSize int64 = 100 << 20
 
 type upstreamStatusError struct {
@@ -551,7 +566,7 @@ func isGzip(data []byte) bool {
 // index.yaml. A mismatch is only reported: Helm does not verify this digest on
 // pull, and about 7% of versions in large public indexes carry a stale one
 // while their tarball is fine.
-func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, data []byte) {
+func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, got string) {
 	if chartVer.Digest == "" {
 		return
 	}
@@ -562,8 +577,6 @@ func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, data []byte) {
 	if !strings.EqualFold(algo, "sha256") {
 		return
 	}
-	sum := sha256.Sum256(data)
-	got := hex.EncodeToString(sum[:])
 	if !strings.EqualFold(want, got) {
 		chartDigestMismatches.Add(1)
 		m.log.Printf("warning: %s@%s: index digest %s does not match tarball sha256 %s", chartVer.Name, chartVer.Version, chartVer.Digest, got)

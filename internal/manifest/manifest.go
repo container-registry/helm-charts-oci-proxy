@@ -55,6 +55,7 @@ type Manifests struct {
 	log         logrus.StdLogger
 	cache       Cache
 	blobHandler handler.BlobHandler
+	blobs       *streamBlobs
 	config      Config
 	httpClient  *http.Client
 }
@@ -74,6 +75,8 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		slots:       make(chan struct{}, concurrency),
 		failures:    newFailureCache(config.IndexErrorCacheTTl),
 	}
+	ma.blobs = newStreamBlobs(blobHandler, ma.openUpstream)
+	ma.blobHandler = ma.blobs
 
 	go func() {
 		ticker := time.NewTicker(time.Minute)
@@ -141,6 +144,12 @@ func (m *Manifests) cleanup(ctx context.Context) {
 			m.log.Println(err)
 		}
 	}
+}
+
+// Blobs is the blob handler to serve: local blobs plus chart layers streamed
+// from their upstream.
+func (m *Manifests) Blobs() handler.BlobHandler {
+	return m.blobs
 }
 
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest

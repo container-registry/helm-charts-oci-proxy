@@ -248,7 +248,7 @@ func TestDownload_BodyIsBounded(t *testing.T) {
 	m, repo := chartServer(t, "", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(bytes.Repeat([]byte{0x1f}, 2<<10))
 	})
-	_, err := getManifest(t, m, repo)
+	_, err := m.download(t.Context(), "https://"+strings.TrimSuffix(repo, "/demo")+"/demo-1.0.0.tgz")
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected size limit error, got %v", err)
 	}
