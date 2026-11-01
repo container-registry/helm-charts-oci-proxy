@@ -305,16 +305,19 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return errors.RegErrInternal(fmt.Errorf("blob handler does not accept writes"))
 	}
 	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), put, m)
-	// The copy is memory to memory. Cancelling it halfway would leave blobs that
-	// no manifest references, so cleanup would never delete them.
+	// The copy is memory to memory and has no I/O to wait on. Stopping it
+	// halfway, by cancellation or the preparation deadline, would leave blobs
+	// that no manifest references, so cleanup would never delete them.
 	copyCtx := context.WithoutCancel(ctx)
-	m.copyMu.RLock()
-	if reference == "" {
-		err = oras.CopyGraph(copyCtx, memStore, dst, root, copyOptions.CopyGraphOptions)
-	} else {
-		_, err = oras.Copy(copyCtx, memStore, root.Digest.String(), dst, reference, copyOptions)
-	}
-	m.copyMu.RUnlock()
+	err = func() error {
+		m.copyMu.RLock()
+		defer m.copyMu.RUnlock()
+		if reference == "" {
+			return oras.CopyGraph(copyCtx, memStore, dst, root, copyOptions.CopyGraphOptions)
+		}
+		_, err := oras.Copy(copyCtx, memStore, root.Digest.String(), dst, reference, copyOptions)
+		return err
+	}()
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
