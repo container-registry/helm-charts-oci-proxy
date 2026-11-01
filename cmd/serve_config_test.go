@@ -112,3 +112,22 @@ func TestLoadServeConfigAcceptsZeroIndexErrorCacheTTL(t *testing.T) {
 		t.Fatalf("indexErrorCacheTTL %v, err %v", c.indexErrorCacheTTL, err)
 	}
 }
+
+// n*time.Second must not wrap to a negative duration that passes the range check.
+func TestLoadServeConfigRejectsOverflowingSeconds(t *testing.T) {
+	big := strconv.FormatInt(maxSeconds+1, 10)
+	for _, key := range []string{"SHUTDOWN_TIMEOUT", "MANIFEST_CACHE_TTL", "INDEX_CACHE_TTL", "INDEX_ERROR_CACHE_TTL"} {
+		t.Run(key, func(t *testing.T) {
+			clearServeEnv(t)
+			t.Setenv(key, big)
+			if c, err := loadServeConfig(); err == nil {
+				t.Errorf("%s=%s accepted: %+v", key, big, c)
+			}
+		})
+	}
+	clearServeEnv(t)
+	t.Setenv("SHUTDOWN_TIMEOUT", strconv.FormatInt(maxSeconds, 10))
+	if c, err := loadServeConfig(); err != nil || c.shutdownTimeout <= 0 {
+		t.Fatalf("largest valid value: %v, %v", c.shutdownTimeout, err)
+	}
+}
