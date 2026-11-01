@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.2.0...v1.2.1) (2026-11-01)
+
+
+### Performance Improvements
+
+* **manifest:** size the index cache for what it holds ([#103](https://github.com/container-registry/helm-charts-oci-proxy/issues/103)) ([3c1e812](https://github.com/container-registry/helm-charts-oci-proxy/commit/3c1e81231bab30ef28c62109e9eb43577558dc2b))
+
 ## [1.2.0](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.1.1...v1.2.0) (2026-11-01)
 
 
