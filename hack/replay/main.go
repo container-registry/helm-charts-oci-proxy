@@ -2,7 +2,7 @@
 // export (VictoriaLogs JSONL) to a proxy, at their original relative timing,
 // and samples the proxy's memory while it runs.
 //
-//	replay -log ingress.jsonl -from 07:59:16 -to 08:08:14 \
+//	replay -log ingress.jsonl -from 2026-11-01T07:59:16Z -to 2026-11-01T08:08:14Z \
 //	  -proxy http://127.0.0.1:19000 -diag http://127.0.0.1:19001 \
 //	  -target docker:chartproxy-diag -out run/
 //
@@ -13,7 +13,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,30 +22,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-)
 
-var (
-	accessLine = regexp.MustCompile(`^\S+ - \S+ \[[^\]]+\] "(GET|HEAD) (\S+) `)
-	registryOp = regexp.MustCompile(`/(manifests|tags/list|blobs)/?`)
+	"github.com/container-registry/helm-charts-oci-proxy/hack/internal/accesslog"
 )
-
-type request struct {
-	at     time.Time
-	method string
-	path   string
-}
 
 func main() {
 	logFile := flag.String("log", "", "VictoriaLogs JSONL export of ingress-nginx access lines")
-	from := flag.String("from", "00:00:00", "window start, UTC HH:MM:SS")
-	to := flag.String("to", "23:59:59", "window end, UTC HH:MM:SS")
+	from := flag.String("from", "", "window start, RFC 3339 (e.g. 2026-11-01T07:59:16Z)")
+	to := flag.String("to", "", "window end, RFC 3339")
 	proxy := flag.String("proxy", "http://127.0.0.1:19000", "proxy base URL")
 	diag := flag.String("diag", "http://127.0.0.1:19001", "proxy DIAG_ADDR base URL")
 	target := flag.String("target", "", "PID, or docker:<container> to read cgroup memory")
@@ -59,7 +48,11 @@ func main() {
 		log.Fatal("-speed and -max-concurrency must be positive")
 	}
 
-	reqs, err := load(*logFile, *from, *to)
+	winFrom, winTo, err := accesslog.ParseWindow(*from, *to)
+	if err != nil {
+		log.Fatal(err)
+	}
+	reqs, err := accesslog.Read(*logFile, winFrom, winTo)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -69,7 +62,7 @@ func main() {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	span := reqs[len(reqs)-1].at.Sub(reqs[0].at)
+	span := reqs[len(reqs)-1].At.Sub(reqs[0].At)
 	log.Printf("replaying %d requests spanning %s at speed %.1f (open loop, max %d in flight)", len(reqs), span, *speed, *maxConc)
 
 	var inflight atomic.Int64
@@ -80,7 +73,12 @@ func main() {
 		sample(*diag, *target, *out, &inflight, stop)
 	}()
 
-	client := &http.Client{Timeout: *timeout}
+	// The default transport keeps 2 idle connections per host; with hundreds of
+	// requests in flight every one would dial anew and churn ephemeral ports.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConns = *maxConc
+	tr.MaxIdleConnsPerHost = *maxConc
+	client := &http.Client{Timeout: *timeout, Transport: tr}
 	sem := make(chan struct{}, *maxConc)
 	var mu sync.Mutex
 	codes := map[int]int{}
@@ -88,7 +86,7 @@ func main() {
 	dropped := 0
 	start := time.Now()
 	for _, r := range reqs {
-		due := time.Duration(float64(r.at.Sub(reqs[0].at)) / *speed)
+		due := time.Duration(float64(r.At.Sub(reqs[0].At)) / *speed)
 		if d := due - time.Since(start); d > 0 {
 			time.Sleep(d)
 		}
@@ -102,7 +100,7 @@ func main() {
 		}
 		wg.Add(1)
 		inflight.Add(1)
-		go func(r request) {
+		go func(r accesslog.Request) {
 			defer func() { <-sem; inflight.Add(-1); wg.Done() }()
 			code := fire(client, *proxy, r)
 			mu.Lock()
@@ -128,42 +126,8 @@ func main() {
 		time.Since(start).Round(time.Second), strings.Join(parts, " "), dropped)
 }
 
-func load(path, from, to string) ([]request, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var out []request
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		var rec struct {
-			Time string `json:"_time"`
-			Msg  string `json:"_msg"`
-		}
-		if json.Unmarshal(sc.Bytes(), &rec) != nil || len(rec.Time) < 19 {
-			continue
-		}
-		if hms := rec.Time[11:19]; hms < from || hms > to {
-			continue
-		}
-		m := accessLine.FindStringSubmatch(rec.Msg)
-		if m == nil || !registryOp.MatchString(m[2]) {
-			continue
-		}
-		at, err := time.Parse(time.RFC3339Nano, rec.Time)
-		if err != nil {
-			continue
-		}
-		out = append(out, request{at: at, method: m[1], path: m[2]})
-	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].at.Before(out[j].at) })
-	return out, sc.Err()
-}
-
-func fire(c *http.Client, base string, r request) int {
-	req, err := http.NewRequest(r.method, base+r.path, nil)
+func fire(c *http.Client, base string, r accesslog.Request) int {
+	req, err := http.NewRequest(r.Method, base+r.Path, nil)
 	if err != nil {
 		return 0
 	}
@@ -191,9 +155,11 @@ type vars struct {
 	IndexParses    int64 `json:"index_parses"`
 }
 
-// sample writes one CSV row per 200ms and saves heap and goroutine profiles
-// each time the in-use heap passes the previous peak by 50MiB, so the last
-// profile written before an OOM kill is the closest available to the kill.
+// sample writes a CSV row at most every 200ms. The docker exec and expvar
+// fetch per row add latency, so rows are often further apart, and the cgroup
+// and heap readings of one row are taken a few milliseconds apart. Heap and
+// goroutine profiles are saved each time the in-use heap passes the last saved
+// value by 50MiB, so heap-peak.pb.gz can be up to 50MiB below the true peak.
 func sample(diag, target, out string, inflight *atomic.Int64, stop <-chan struct{}) {
 	f, err := os.Create(filepath.Join(out, "mem.csv"))
 	if err != nil {

@@ -24,7 +24,7 @@ go build -o .bin/replay ./hack/replay
 CGO_ENABLED=0 GOOS=linux go build -o .bin/upstream-mirror-linux ./hack/upstream-mirror
 docker build -t chartproxy:local .
 
-.bin/upstream-mirror fetch -log ingress.jsonl -from 07:59:16 -to 08:08:14 -dir mirror
+.bin/upstream-mirror fetch -log ingress.jsonl -from 2026-11-01T07:59:16Z -to 2026-11-01T08:08:14Z -dir mirror
 
 # The mirror answers for the real hostnames inside a dedicated network.
 docker network create cpbench
@@ -37,7 +37,7 @@ docker run -d --name chartproxy --network cpbench --memory=1g --memory-swap=1g -
   -p 127.0.0.1:19000:9000 -p 127.0.0.1:19001:9001 -e DIAG_ADDR=0.0.0.0:9001 -e ALLOW_PRIVATE_NETWORKS=true \
   -e SSL_CERT_FILE=/ca.pem -v "$PWD/mirror/ca.pem:/ca.pem:ro" chartproxy:local
 
-.bin/replay -log ingress.jsonl -from 07:59:16 -to 08:08:14 -target docker:chartproxy -out run
+.bin/replay -log ingress.jsonl -from 2026-11-01T07:59:16Z -to 2026-11-01T08:08:14Z -target docker:chartproxy -out run
 docker inspect chartproxy --format '{{.State.OOMKilled}}'
 go tool pprof -top -sample_index=inuse_space run/heap-peak.pb.gz
 ```

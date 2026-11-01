@@ -116,13 +116,9 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	}
 
 	elem = elem[1:]
-	target := elem[len(elem)-1]
-	if target != "" && strings.HasPrefix(target, "v") {
-		target = target[1:]
-	}
 	// Cached manifests are keyed by the index version, so the tag form is
 	// normalised once here and never looked up again.
-	target = helper.TagToVersion(target)
+	target := ManifestTarget(elem[len(elem)-1])
 
 	var repoParts []string
 	for i := len(elem) - 3; i > 0; i-- {

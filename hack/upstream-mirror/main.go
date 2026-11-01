@@ -3,7 +3,7 @@
 // measure the proxy, not the network between the test machine and the
 // upstream chart hosts.
 //
-//	upstream-mirror fetch -log ingress.jsonl -from 07:59:16 -to 08:08:14 -dir mirror
+//	upstream-mirror fetch -log ingress.jsonl -from 2026-11-01T07:59:16Z -to 2026-11-01T08:08:14Z -dir mirror
 //	upstream-mirror serve -dir mirror -addr :443 -latency 20ms
 //
 // fetch resolves every requested chart version with the proxy's own index
@@ -13,7 +13,6 @@
 package main
 
 import (
-	"bufio"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -33,7 +32,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,7 +39,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
+	"github.com/container-registry/helm-charts-oci-proxy/hack/internal/accesslog"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/manifest"
 )
 
@@ -76,8 +74,8 @@ func main() {
 func fetch(args []string) {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
 	logFile := fs.String("log", "", "VictoriaLogs JSONL export of ingress-nginx access lines")
-	from := fs.String("from", "00:00:00", "window start, UTC HH:MM:SS")
-	to := fs.String("to", "23:59:59", "window end, UTC HH:MM:SS")
+	from := fs.String("from", "", "window start, RFC 3339 (e.g. 2026-11-01T07:59:16Z)")
+	to := fs.String("to", "", "window end, RFC 3339")
 	dir := fs.String("dir", "mirror", "mirror directory, reused across runs")
 	workers := fs.Int("workers", 16, "parallel chart downloads")
 	dry := fs.Bool("dry-run", false, "download indexes only and report chart counts")
@@ -86,7 +84,11 @@ func fetch(args []string) {
 		log.Fatal("-workers must be at least 1")
 	}
 
-	wanted, err := readRequests(*logFile, *from, *to)
+	start, end, err := accesslog.ParseWindow(*from, *to)
+	if err != nil {
+		log.Fatal(err)
+	}
+	wanted, err := readRequests(*logFile, start, end)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -106,6 +108,7 @@ func fetch(args []string) {
 	}
 
 	var charts []string
+	unroutable := 0
 	seen := map[string]bool{}
 	for _, indexPath := range sortedKeys(wanted) {
 		e, ok := st.download(client, "https://"+indexPath+"/index.yaml")
@@ -129,12 +132,12 @@ func fetch(args []string) {
 			if err != nil || len(cv.URLs) == 0 {
 				continue
 			}
-			u, err := url.Parse(cv.URLs[0])
-			if err == nil && !u.IsAbs() {
-				u, err = url.Parse(fmt.Sprintf("https://%s/%s", indexPath, cv.URLs[0]))
-			}
+			u, err := manifest.ChartURL(indexPath, cv)
 			if err != nil || u.Scheme != "https" {
 				continue
+			}
+			if p := u.Port(); (p != "" && p != "443") || net.ParseIP(u.Hostname()) != nil {
+				unroutable++
 			}
 			resolved++
 			if k := key(u); !seen[k] {
@@ -146,6 +149,9 @@ func fetch(args []string) {
 	}
 	st.save()
 	log.Printf("%d index hosts, %d distinct chart URLs", len(wanted), len(charts))
+	if unroutable > 0 {
+		log.Printf("warning: %d chart URLs use an IP literal or a port other than 443; network aliases on :443 cannot intercept them, so a replay reaches the real host", unroutable)
+	}
 	if *dry {
 		return
 	}
@@ -185,67 +191,44 @@ func fetch(args []string) {
 
 type chartRef struct{ chart, version string }
 
-var accessLine = regexp.MustCompile(`^\S+ - \S+ \[[^\]]+\] "(?:GET|HEAD) (\S+) `)
-
-// readRequests returns, per index path, the chart versions the proxy would
-// look up for the window's manifest requests. Tag lists come from the index
-// alone and need no chart downloads.
-func readRequests(path, from, to string) (map[string]map[chartRef]bool, error) {
-	f, err := os.Open(path)
+// readRequests returns, per index path, the chart versions the proxy looks up
+// for the window's manifest requests. Tag lists come from the index alone and
+// need no chart downloads.
+func readRequests(path string, from, to time.Time) (map[string]map[chartRef]bool, error) {
+	reqs, err := accesslog.Read(path, from, to)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	out := map[string]map[chartRef]bool{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		var rec struct {
-			Time string `json:"_time"`
-			Msg  string `json:"_msg"`
-		}
-		if json.Unmarshal(sc.Bytes(), &rec) != nil || len(rec.Time) < 19 {
-			continue
-		}
-		if hms := rec.Time[11:19]; hms < from || hms > to {
-			continue
-		}
-		m := accessLine.FindStringSubmatch(rec.Msg)
-		if m == nil {
-			continue
-		}
-		p, _, _ := strings.Cut(m[1], "?")
+	for _, r := range reqs {
+		p, _, _ := strings.Cut(r.Path, "?")
 		i := strings.LastIndex(p, "/v2/")
 		if i < 0 {
 			continue
 		}
 		p = p[i+len("/v2/"):]
-		j := strings.LastIndex(p, "/manifests/")
-		if j < 0 {
-			if strings.HasSuffix(p, "/tags/list") {
-				if repo := strings.TrimSuffix(p, "/tags/list"); strings.Contains(repo, "/") {
-					indexPath := repo[:strings.LastIndex(repo, "/")]
-					if out[indexPath] == nil {
-						out[indexPath] = map[chartRef]bool{}
-					}
-				}
-			}
+		var repo, ref string
+		if j := strings.LastIndex(p, "/manifests/"); j >= 0 {
+			repo, ref = p[:j], p[j+len("/manifests/"):]
+		} else if strings.HasSuffix(p, "/tags/list") {
+			repo = strings.TrimSuffix(p, "/tags/list")
+		} else {
 			continue
 		}
-		repo, ref := p[:j], p[j+len("/manifests/"):]
 		k := strings.LastIndex(repo, "/")
-		if k < 0 || ref == "" || strings.HasPrefix(ref, "sha256:") {
+		if k < 0 {
 			continue
 		}
-		// Same normalisation as Manifests.Handle followed by prepareChart.
-		version := "v" + helper.TagToVersion(strings.TrimPrefix(ref, "v"))
 		indexPath := repo[:k]
 		if out[indexPath] == nil {
 			out[indexPath] = map[chartRef]bool{}
 		}
-		out[indexPath][chartRef{repo[k+1:], version}] = true
+		if ref == "" || strings.HasPrefix(ref, "sha256:") {
+			continue
+		}
+		out[indexPath][chartRef{repo[k+1:], manifest.IndexReference(manifest.ManifestTarget(ref))}] = true
 	}
-	return out, sc.Err()
+	return out, nil
 }
 
 func key(u *url.URL) string {
