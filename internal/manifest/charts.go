@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	stderrors "errors"
 	"expvar"
@@ -187,8 +188,18 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	chartPrepareAttempts.Add(1)
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
-		return errors.RegErrInternal(err)
+		return chartDownloadError(err)
 	}
+	// Some hosts answer 200 with an HTML page for missing files; packaging that
+	// would hand clients a chart that cannot be installed.
+	if !isGzip(manifestData) {
+		return &errors.RegError{
+			Status:  http.StatusBadGateway,
+			Code:    "UPSTREAM_ERROR",
+			Message: fmt.Sprintf("upstream %s did not return a gzip chart archive", downloadUrl),
+		}
+	}
+	m.checkIndexDigest(chartVer, manifestData)
 
 	// Rewrite chart dependencies if enabled
 	if rewriteOpts.Enabled && rewriteOpts.ProxyHost != "" {
@@ -331,11 +342,12 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 }
 
 var (
-	indexParses          = expvar.NewInt("index_parses")
-	indexParseMs         = expvar.NewInt("index_parse_ms")
-	indexDownloads       = expvar.NewInt("index_downloads")
-	chartsPrepared       = expvar.NewInt("charts_prepared")
-	chartPrepareAttempts = expvar.NewInt("chart_prepare_attempts")
+	indexParses           = expvar.NewInt("index_parses")
+	indexParseMs          = expvar.NewInt("index_parse_ms")
+	indexDownloads        = expvar.NewInt("index_downloads")
+	chartsPrepared        = expvar.NewInt("charts_prepared")
+	chartPrepareAttempts  = expvar.NewInt("chart_prepare_attempts")
+	chartDigestMismatches = expvar.NewInt("chart_digest_mismatches")
 )
 
 func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
@@ -459,5 +471,53 @@ func (m *Manifests) download(rawURL string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// Drain a bounded amount so the connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		return nil, &upstreamStatusError{url: rawURL, status: resp.StatusCode}
+	}
 	return io.ReadAll(resp.Body)
+}
+
+type upstreamStatusError struct {
+	url    string
+	status int
+}
+
+func (e *upstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream %s returned HTTP %d", e.url, e.status)
+}
+
+// chartDownloadError maps a failed chart download to the registry response.
+// An upstream 404 or 410 means the chart version does not exist; any other
+// upstream failure is the upstream's fault, not the proxy's.
+func chartDownloadError(err error) *errors.RegError {
+	var se *upstreamStatusError
+	if !stderrors.As(err, &se) {
+		return errors.RegErrInternal(err)
+	}
+	if se.status == http.StatusNotFound || se.status == http.StatusGone {
+		return &errors.RegError{Status: http.StatusNotFound, Code: "MANIFEST_UNKNOWN", Message: err.Error()}
+	}
+	return &errors.RegError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: err.Error()}
+}
+
+func isGzip(data []byte) bool {
+	return len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b
+}
+
+// checkIndexDigest compares the tarball with the digest published in
+// index.yaml. A mismatch is only reported: Helm does not verify this digest on
+// pull, and about 7% of versions in large public indexes carry a stale one
+// while their tarball is fine.
+func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, data []byte) {
+	if chartVer.Digest == "" {
+		return
+	}
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	if !strings.EqualFold(strings.TrimPrefix(chartVer.Digest, "sha256:"), got) {
+		chartDigestMismatches.Add(1)
+		m.log.Printf("warning: %s@%s: index digest %s does not match tarball sha256 %s", chartVer.Name, chartVer.Version, chartVer.Digest, got)
+	}
 }
