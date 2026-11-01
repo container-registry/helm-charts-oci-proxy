@@ -75,6 +75,9 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 
 			rewriteDeps, _ := env.GetBool("REWRITE_DEPENDENCIES", false)
 			proxyHost := env.GetString("PROXY_HOST", "")
+			if err := validateRewrite(rewriteDeps, proxyHost); err != nil {
+				l.Fatalln(err)
+			}
 			allowPrivateNetworks, _ := env.GetBool("ALLOW_PRIVATE_NETWORKS", false)
 
 			useTLS, _ := env.GetBool("USE_TLS", false)
@@ -162,6 +165,15 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 }
 
 const maxIndexCacheMiB = 1 << 20
+
+// validateRewrite requires PROXY_HOST because rewritten charts are shared by
+// all clients; the host must not come from a request.
+func validateRewrite(rewriteDeps bool, proxyHost string) error {
+	if rewriteDeps && proxyHost == "" {
+		return errors.New("REWRITE_DEPENDENCIES=true requires PROXY_HOST")
+	}
+	return nil
+}
 
 // newIndexCache holds one parsed index per chart repository. NumCounters is 10x
 // the expected key count, as ristretto recommends; 1e7 cost a fixed 48MiB.

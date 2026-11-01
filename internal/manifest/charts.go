@@ -134,7 +134,7 @@ func ChartURL(indexPath string, cv *repo.ChartVersion) (*url.URL, error) {
 	return url.Parse(resolved)
 }
 
-func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string, rewriteOpts RewriteOptions) *errors.RegError {
+func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string) *errors.RegError {
 	elem := strings.Split(repo, "/")
 
 	if len(elem) < 2 {
@@ -185,8 +185,9 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	downloadUrl := u.String()
 
+	proxyHost := m.config.ProxyHost
 	// Dependency rewriting changes the tarball, so only that path buffers it.
-	if !rewriteOpts.Enabled || rewriteOpts.ProxyHost == "" {
+	if !m.config.RewriteDependencies || proxyHost == "" {
 		return m.prepareStreamed(ctx, path, chartVer, downloadUrl, reference)
 	}
 
@@ -208,8 +209,8 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadUrl, err)
 	}
 
-	if rewriteOpts.Enabled && rewriteOpts.ProxyHost != "" {
-		rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, rewriteOpts.ProxyHost, m.log)
+	if proxyHost != "" {
+		rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, proxyHost, m.log)
 		if rewriteErr != nil {
 			m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
 		} else if result.Modified {

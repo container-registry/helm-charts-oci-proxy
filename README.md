@@ -187,8 +187,8 @@ There are not many options in configure the application except the following.
 * `USE_TLS` - enabled HTTP over TLS
 * `CERT_FILE` - TLS certificate path when `USE_TLS` is set, default `certs/registry.pem`
 * `KEY_FILE` - TLS private key path when `USE_TLS` is set, default `certs/registry-key.pem`
-* `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Default is `false`.
-* `PROXY_HOST` - override the proxy host used in rewritten dependency URLs. If not set, uses the Host header from incoming requests.
+* `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Applies to every request. Requires `PROXY_HOST`; the proxy refuses to start without it. Default is `false`.
+* `PROXY_HOST` - the proxy host used in rewritten dependency URLs, e.g. `chartproxy.example.com`. Required when `REWRITE_DEPENDENCIES` is `true`.
 * `ALLOW_PRIVATE_NETWORKS` - allow upstream downloads from private, loopback, and link-local addresses. Off by default as an SSRF guard; enable only when proxying chart repositories on an internal network. Default is `false`.
 * `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, in-memory blob store size). Unset by default, which disables the listener. Never expose it through the public ingress.
 
@@ -210,18 +210,8 @@ dependencies:
     repository: oci://chartproxy.container-registry.com/charts.bitnami.com/bitnami
 ```
 
-The `rewrite_dependencies` query parameter overrides the setting per request. Helm does not accept query
-strings in OCI references, so this only works for clients that speak the registry API directly:
-
-```bash
-# Enable rewriting for this manifest request
-curl -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-  "https://chartproxy.example.com/v2/charts.bitnami.com/bitnami/redis/manifests/1.0.0?rewrite_dependencies=true"
-
-# Disable rewriting for this manifest request
-curl -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-  "https://chartproxy.example.com/v2/charts.jetstack.io/cert-manager/manifests/1.11.2?rewrite_dependencies=false"
-```
+Rewriting is a process-wide setting. Prepared charts are cached and served to every client, so a request
+cannot switch rewriting on or off, and the request `Host` header is never used in rewritten URLs.
 
 The following URL types are NOT rewritten:
 - `file://` - local file dependencies

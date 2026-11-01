@@ -186,12 +186,9 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	})
 	repo := strings.Join(repoParts, "/")
 
-	// Determine rewrite options from config and query params
-	rewriteOpts := m.getRewriteOptions(req)
-
 	switch req.Method {
 	case http.MethodGet, http.MethodHead:
-		ma, err := m.manifest(req.Context(), repo, target, rewriteOpts)
+		ma, err := m.manifest(req.Context(), repo, target)
 		if err != nil {
 			return err
 		}
@@ -256,9 +253,6 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 			Message: "We don't understand your method + url",
 		}
 	}
-	// Determine rewrite options from config and query params
-	rewriteOpts := m.getRewriteOptions(req)
-
 	repoPath := strings.Join(repoParts[:len(repoParts)-1], "/")
 	chartName := repoParts[len(repoParts)-1]
 
@@ -285,7 +279,7 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	if !fromIndex {
 		names := m.names(fullRepo)
 		if len(names) == 0 {
-			if err := m.prepare(req.Context(), fullRepo, "", rewriteOpts); err != nil {
+			if err := m.prepare(req.Context(), fullRepo, ""); err != nil {
 				return err
 			}
 			names = m.names(fullRepo)
@@ -433,27 +427,4 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) e
 		return errors.RegErrInternal(err)
 	}
 	return nil
-}
-
-// getRewriteOptions determines rewrite options from config and query parameters.
-// Query parameter "rewrite_dependencies" overrides the config setting.
-func (m *Manifests) getRewriteOptions(req *http.Request) RewriteOptions {
-	// Start with config value
-	enabled := m.config.RewriteDependencies
-
-	// Query param overrides config
-	if qp := req.URL.Query().Get("rewrite_dependencies"); qp != "" {
-		enabled = qp == "true" || qp == "1"
-	}
-
-	// Determine proxy host: config overrides request host
-	proxyHost := m.config.ProxyHost
-	if proxyHost == "" {
-		proxyHost = req.Host
-	}
-
-	return RewriteOptions{
-		Enabled:   enabled,
-		ProxyHost: proxyHost,
-	}
 }
