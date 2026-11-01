@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -42,9 +43,11 @@ func loadOrDiscover(path string, refresh bool, c *http.Client, base string, depr
 			if err := json.Unmarshal(raw, &d); err != nil {
 				return nil, false, fmt.Errorf("%s: %w", path, err)
 			}
-			return &d, true, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
+			if d.Query == discoveryQuery(deprecated) {
+				return &d, true, nil
+			}
+			log.Printf("%s holds query %q, want %q; querying Artifact Hub again", path, d.Query, discoveryQuery(deprecated))
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return nil, false, err
 		}
 	}
@@ -61,11 +64,15 @@ func loadOrDiscover(path string, refresh bool, c *http.Client, base string, depr
 
 // discover pages through the search the Artifact Hub UI runs for
 // ?kind=0&cncf=true. Like the UI, it leaves out deprecated packages unless asked.
-func discover(c *http.Client, base string, deprecated bool) (*Discovery, error) {
-	q := "kind=0&cncf=true"
+func discoveryQuery(deprecated bool) string {
 	if deprecated {
-		q += "&deprecated=true"
+		return "kind=0&cncf=true&deprecated=true"
 	}
+	return "kind=0&cncf=true"
+}
+
+func discover(c *http.Client, base string, deprecated bool) (*Discovery, error) {
+	q := discoveryQuery(deprecated)
 	d := &Discovery{FetchedAt: time.Now().UTC(), Query: q}
 	seen := map[string]bool{}
 	for offset := 0; ; offset += pageSize {
