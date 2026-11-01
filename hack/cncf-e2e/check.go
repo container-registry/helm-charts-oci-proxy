@@ -103,9 +103,10 @@ type upstream struct {
 	staleIndexDigest bool
 }
 
-func (k *checker) check(j job) Result {
+// check has a named result so the deferred duration lands in the returned value.
+func (k *checker) check(j job) (r Result) {
 	start := time.Now()
-	r := Result{RepoURL: j.pkg.Repository.URL, Chart: j.pkg.Name, Version: j.version}
+	r = Result{RepoURL: j.pkg.Repository.URL, Chart: j.pkg.Name, Version: j.version}
 	defer func() { r.Seconds = time.Since(start).Seconds() }()
 
 	if !strings.HasPrefix(r.RepoURL, "https://") {
