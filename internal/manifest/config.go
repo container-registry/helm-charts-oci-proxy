@@ -6,6 +6,7 @@ type Config struct {
 	Debug              bool
 	CacheTTL           time.Duration // for how long store manifest
 	IndexCacheTTL      time.Duration
+	IndexCacheMaxCost  int64 // ristretto MaxCost of the index cache
 	IndexErrorCacheTTl time.Duration
 
 	// AllowPrivateNetworks permits upstream downloads from private, loopback,
