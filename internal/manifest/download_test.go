@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	stderrors "errors"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
@@ -120,6 +122,54 @@ func TestPrepareChart_UpstreamErrorIsNeverPackaged(t *testing.T) {
 	}
 }
 
+// An index entry that points to an OCI registry cannot be converted. Before
+// this change the proxy refused the oci:// URL as a non-https download and
+// answered 500, which clients and Harbor treat as a server fault and retry.
+func TestPrepareChart_OCIChartURLIsNotFound(t *testing.T) {
+	var downloads atomic.Int32
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/index.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(w, `apiVersion: v1
+entries:
+  demo:
+    - apiVersion: v2
+      name: demo
+      version: 1.0.0
+      urls:
+        - oci://%s/charts/demo:1.0.0
+`, strings.TrimPrefix(srv.URL, "https://"))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		downloads.Add(1)
+		w.WriteHeader(http.StatusTeapot)
+	})
+	srv = httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m.httpClient = srv.Client()
+	repo := strings.TrimPrefix(srv.URL, "https://") + "/demo"
+
+	attempts := chartPrepareAttempts.Value()
+	rec, err := getManifest(t, m, repo)
+	if got := chartPrepareAttempts.Value() - attempts; got != 1 {
+		t.Errorf("chart_prepare_attempts grew by %d, want 1", got)
+	}
+	if err == nil {
+		t.Fatalf("expected an error, got status %d", rec.Code)
+	}
+	if got := regStatus(t, err); got != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 (%v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "oci://"+strings.TrimPrefix(srv.URL, "https://")+"/charts/demo:1.0.0") {
+		t.Errorf("error does not name the OCI location: %v", err)
+	}
+	if n := downloads.Load(); n != 0 {
+		t.Errorf("%d upstream requests besides the index", n)
+	}
+}
+
 // Helm does not verify the index digest on pull, and public indexes carry
 // stale digests for working tarballs, so a mismatch must not fail the pull.
 func TestPrepareChart_IndexDigestMismatchIsObservedOnly(t *testing.T) {
@@ -201,5 +251,39 @@ func TestDownload_BodyIsBounded(t *testing.T) {
 	_, err := getManifest(t, m, repo)
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("expected size limit error, got %v", err)
+	}
+}
+
+// tags/list advertised OCI-only versions whose manifests always answer 404, so
+// replication and proxy-cache scans failed on tags the proxy itself listed.
+func TestHandleTags_SkipsOCIOnlyVersions(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `apiVersion: v1
+entries:
+  demo:
+    - apiVersion: v2
+      name: demo
+      version: 2.0.0
+      urls: [oci://registry.example.com/charts/demo:2.0.0]
+    - apiVersion: v2
+      name: demo
+      version: 1.0.0
+      urls: [demo-1.0.0.tgz]
+`)
+	}))
+	t.Cleanup(srv.Close)
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m.httpClient = srv.Client()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/"+strings.TrimPrefix(srv.URL, "https://")+"/demo/tags/list", nil)
+	if err := m.HandleTags(rec, req); err != nil {
+		t.Fatalf("tags/list: %v", err)
+	}
+	var got listTags
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tags) != 1 || got.Tags[0] != "1.0.0" {
+		t.Errorf("tags = %v, want [1.0.0]", got.Tags)
 	}
 }

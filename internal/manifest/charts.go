@@ -162,7 +162,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if err != nil {
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
-			Code:    "NOT FOUND",
+			Code:    "MANIFEST_UNKNOWN",
 			Message: fmt.Sprintf("Chart: %s version: %s not found: %v", chart, reference, err),
 		}
 	}
@@ -170,7 +170,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if len(chartVer.URLs) == 0 {
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
-			Code:    "NOT FOUND",
+			Code:    "MANIFEST_UNKNOWN",
 			Message: fmt.Sprintf("Chart has no URLs"),
 		}
 	}
@@ -180,9 +180,17 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
+	chartPrepareAttempts.Add(1)
+	// The chart already lives in an OCI registry; there is no tarball to convert.
+	if u.Scheme == "oci" {
+		return &errors.RegError{
+			Status:  http.StatusNotFound,
+			Code:    "MANIFEST_UNKNOWN",
+			Message: fmt.Sprintf("chart %s version %s is published only as OCI artifact %s; pull it from there", chartVer.Name, chartVer.Version, chartVer.URLs[0]),
+		}
+	}
 	downloadUrl := u.String()
 
-	chartPrepareAttempts.Add(1)
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
 		return downloadError(err, "MANIFEST_UNKNOWN")
