@@ -113,7 +113,7 @@ func (k *checker) check(j job) (r Result) {
 		r.Class, r.Reason = classNA, "repository is not a classic https chart repository"
 		return r
 	}
-	up, class, reason := k.upstreamCheck(j)
+	up, class, reason := k.upstreamCheck(j, false)
 	if up != nil {
 		r.Version = up.cv.Version
 		r.DownloadURL, r.UpstreamDigest, r.UpstreamSize, r.IndexDigest = up.downloadURL, up.digest, up.size, up.cv.Digest
@@ -142,12 +142,14 @@ func (k *checker) check(j job) (r Result) {
 		r.Class, r.Reason = classOK, strings.TrimPrefix(note+"; passed on retry", "; ")
 		return r
 	}
-	again, class, reason := k.upstreamCheck(j)
+	// A fresh index: the run-wide cached one would miss a version republished
+	// at a new URL, which the proxy already serves.
+	again, class, reason := k.upstreamCheck(j, true)
 	switch {
 	case class != "":
 		r.Class, r.Reason = classUpstream, "upstream failed on recheck: "+reason
-	case again.digest != up.digest:
-		r.Class, r.Reason = classUpstream, fmt.Sprintf("upstream tarball changed during the run: %s then %s", up.digest, again.digest)
+	case again.downloadURL != up.downloadURL || again.digest != up.digest:
+		r.Class, r.Reason = classUpstream, fmt.Sprintf("upstream changed during the run: %s %s, then %s %s", up.downloadURL, up.digest, again.downloadURL, again.digest)
 	default:
 		if ev != nil && ev.Detail == "" {
 			ev.Detail = err.Error()
@@ -165,8 +167,12 @@ func repoPath(repoURL string) string {
 	return u.Host + strings.TrimSuffix(u.Path, "/")
 }
 
-func (k *checker) upstreamCheck(j job) (*upstream, string, string) {
-	idx, err := k.idx.get(j.pkg.Repository.URL)
+func (k *checker) upstreamCheck(j job, freshIndex bool) (*upstream, string, string) {
+	get := k.idx.get
+	if freshIndex {
+		get = k.idx.load
+	}
+	idx, err := get(j.pkg.Repository.URL)
 	if err != nil {
 		return nil, classUpstream, "index: " + err.Error()
 	}
