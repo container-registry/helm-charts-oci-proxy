@@ -23,11 +23,12 @@ import (
 	"github.com/container-registry/helm-charts-oci-proxy/internal/manifest"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/registry"
 	"github.com/dgraph-io/ristretto"
-	"k8s.io/utils/env"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -175,26 +176,28 @@ type serveConfig struct {
 func loadServeConfig() (serveConfig, error) {
 	var r envReader
 	c := serveConfig{
-		port:                 r.int("PORT", 9000, 0),
+		port:                 r.int("PORT", 9000, 1, 65535),
 		debug:                r.bool("DEBUG", false),
 		manifestCacheTTL:     r.seconds("MANIFEST_CACHE_TTL", 60, 0),
 		indexCacheTTL:        r.seconds("INDEX_CACHE_TTL", 4*3600, 0),
-		indexCacheMiB:        r.int("INDEX_CACHE_SIZE_MIB", 128, 1),
+		indexCacheMiB:        r.int("INDEX_CACHE_SIZE_MIB", 128, 1, maxIndexCacheMiB),
 		indexErrorCacheTTL:   r.seconds("INDEX_ERROR_CACHE_TTL", 30, 0),
-		prepareConcurrency:   r.int("PREPARE_CONCURRENCY", manifest.DefaultPrepareConcurrency, 1),
+		prepareConcurrency:   r.int("PREPARE_CONCURRENCY", manifest.DefaultPrepareConcurrency, 1, math.MaxInt),
 		rewriteDeps:          r.bool("REWRITE_DEPENDENCIES", false),
-		proxyHost:            env.GetString("PROXY_HOST", ""),
+		proxyHost:            r.str("PROXY_HOST", ""),
 		allowPrivateNetworks: r.bool("ALLOW_PRIVATE_NETWORKS", false),
 		useTLS:               r.bool("USE_TLS", false),
-		certFile:             env.GetString("CERT_FILE", "certs/registry.pem"),
-		keyFile:              env.GetString("KEY_FILE", "certs/registry-key.pem"),
+		certFile:             r.str("CERT_FILE", "certs/registry.pem"),
+		keyFile:              r.str("KEY_FILE", "certs/registry-key.pem"),
 		shutdownTimeout:      r.seconds("SHUTDOWN_TIMEOUT", 25, 1),
-		diagAddr:             env.GetString("DIAG_ADDR", ""),
+		diagAddr:             r.str("DIAG_ADDR", ""),
 	}
 	r.add(validateRewrite(c.rewriteDeps, c.proxyHost))
 	return c, errors.Join(r.errs...)
 }
 
+// envReader treats a variable that is set but empty as unset, because charts
+// and compose files render an unset value as "".
 type envReader struct{ errs []error }
 
 func (r *envReader) add(err error) {
@@ -203,26 +206,47 @@ func (r *envReader) add(err error) {
 	}
 }
 
-func (r *envReader) int(key string, def, minimum int) int {
-	v, err := env.GetInt(key, def)
-	if err != nil {
-		r.add(fmt.Errorf("%s: %w", key, err))
-	} else if v < minimum {
-		r.add(fmt.Errorf("%s must be at least %d, got %d", key, minimum, v))
+func (r *envReader) str(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return v
+	return def
 }
 
+func (r *envReader) int(key string, def, minimum, maximum int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		r.add(fmt.Errorf("%s: %w", key, err))
+		return def
+	}
+	if n < minimum || n > maximum {
+		r.add(fmt.Errorf("%s must be between %d and %d, got %d", key, minimum, maximum, n))
+	}
+	return n
+}
+
+// maxSeconds keeps n*time.Second from overflowing.
+const maxSeconds = math.MaxInt64 / int64(time.Second)
+
 func (r *envReader) seconds(key string, def, minimum int) time.Duration {
-	return time.Duration(r.int(key, def, minimum)) * time.Second
+	return time.Duration(r.int(key, def, minimum, int(maxSeconds))) * time.Second
 }
 
 func (r *envReader) bool(key string, def bool) bool {
-	v, err := env.GetBool(key, def)
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
 	if err != nil {
 		r.add(fmt.Errorf("%s: %w", key, err))
+		return def
 	}
-	return v
+	return b
 }
 
 // validateRewrite requires PROXY_HOST because rewritten charts are shared by
@@ -238,9 +262,6 @@ func validateRewrite(rewriteDeps bool, proxyHost string) error {
 // the expected key count, as ristretto recommends; 1e7 cost a fixed 48MiB.
 // Entry costs come from manifest.IndexCost, which already includes overhead.
 func newIndexCache(sizeMiB int, metrics bool) (*ristretto.Cache, error) {
-	if sizeMiB < 1 || sizeMiB > maxIndexCacheMiB {
-		return nil, fmt.Errorf("INDEX_CACHE_SIZE_MIB must be between 1 and %d, got %d", maxIndexCacheMiB, sizeMiB)
-	}
 	return ristretto.NewCache(&ristretto.Config{
 		NumCounters:        1e4,
 		MaxCost:            int64(sizeMiB) << 20,

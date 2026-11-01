@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +51,11 @@ func TestLoadServeConfigRejectsInvalidValues(t *testing.T) {
 			}
 		})
 	}
-	for key, v := range map[string]string{"PREPARE_CONCURRENCY": "0", "SHUTDOWN_TIMEOUT": "0", "INDEX_CACHE_SIZE_MIB": "0", "MANIFEST_CACHE_TTL": "-1"} {
+	for key, v := range map[string]string{
+		"PREPARE_CONCURRENCY": "0", "SHUTDOWN_TIMEOUT": "0", "MANIFEST_CACHE_TTL": "-1",
+		"PORT": "0", "PORT ": "65536", "INDEX_CACHE_SIZE_MIB": "0", "INDEX_CACHE_SIZE_MIB ": strconv.Itoa(maxIndexCacheMiB + 1),
+	} {
+		key := strings.TrimSpace(key)
 		t.Run(key+"="+v, func(t *testing.T) {
 			t.Setenv(key, v)
 			if _, err := loadServeConfig(); err == nil {
@@ -70,5 +75,31 @@ func TestLoadServeConfigRejectsRewriteWithoutProxyHost(t *testing.T) {
 	c, err := loadServeConfig()
 	if err != nil || !c.rewriteDeps || c.proxyHost != "proxy.example.com" {
 		t.Fatalf("config %+v, err %v", c, err)
+	}
+}
+
+// Charts render an unset value as "", which must select the default.
+func TestLoadServeConfigTreatsEmptyAsUnset(t *testing.T) {
+	clearServeEnv(t)
+	for _, k := range serveEnvKeys {
+		t.Setenv(k, "")
+	}
+	c, err := loadServeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.port != 9000 || c.debug || c.manifestCacheTTL != time.Minute || c.indexCacheMiB != 128 ||
+		c.certFile != "certs/registry.pem" || c.keyFile != "certs/registry-key.pem" || c.shutdownTimeout != 25*time.Second {
+		t.Errorf("empty variables did not select the defaults: %+v", c)
+	}
+}
+
+func TestLoadServeConfigReportsAllErrors(t *testing.T) {
+	clearServeEnv(t)
+	t.Setenv("PORT", "notaport")
+	t.Setenv("INDEX_CACHE_SIZE_MIB", strconv.Itoa(maxIndexCacheMiB+1))
+	_, err := loadServeConfig()
+	if err == nil || !strings.Contains(err.Error(), "PORT") || !strings.Contains(err.Error(), "INDEX_CACHE_SIZE_MIB") {
+		t.Fatalf("err = %v, want both PORT and INDEX_CACHE_SIZE_MIB", err)
 	}
 }
