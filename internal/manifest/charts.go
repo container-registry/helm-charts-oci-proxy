@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	stderrors "errors"
 	"expvar"
@@ -18,6 +19,7 @@ import (
 	helmregistry "helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/repo"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"oras.land/oras-go/v2"
@@ -150,11 +152,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 
 	index, err := m.GetIndex(path)
 	if err != nil {
-		return &errors.RegError{
-			Status:  http.StatusNotFound,
-			Code:    "NAME_UNKNOWN",
-			Message: fmt.Sprintf("index file fetch error: %s", path),
-		}
+		return downloadError(fmt.Errorf("index file fetch error: %s: %w", path, err), "NAME_UNKNOWN")
 	}
 
 	reference = IndexReference(reference)
@@ -187,29 +185,45 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	chartPrepareAttempts.Add(1)
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
-		return errors.RegErrInternal(err)
+		return downloadError(err, "MANIFEST_UNKNOWN")
+	}
+	// Some hosts answer 200 with an HTML page for missing files; packaging that
+	// would hand clients a chart that cannot be installed.
+	if !isGzip(manifestData) {
+		return &errors.RegError{
+			Status:  http.StatusBadGateway,
+			Code:    "UPSTREAM_ERROR",
+			Message: fmt.Sprintf("upstream %s did not return a gzip chart archive", downloadUrl),
+		}
+	}
+	m.checkIndexDigest(chartVer, manifestData)
+
+	// A gzip header alone does not make a chart: a truncated archive or
+	// gzip-compressed HTML passes isGzip but cannot be installed.
+	chartMeta, err := extractChartMeta(manifestData)
+	if err != nil {
+		return &errors.RegError{
+			Status:  http.StatusBadGateway,
+			Code:    "UPSTREAM_ERROR",
+			Message: fmt.Sprintf("upstream %s did not return a valid chart archive: %v", downloadUrl, err),
+		}
 	}
 
-	// Rewrite chart dependencies if enabled
 	if rewriteOpts.Enabled && rewriteOpts.ProxyHost != "" {
 		rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, rewriteOpts.ProxyHost, m.log)
 		if rewriteErr != nil {
 			m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
-			// Continue with original data (fail open)
 		} else if result.Modified {
-			manifestData = rewrittenData
-			if m.config.Debug {
-				m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
+			// The config must describe the archive that is served.
+			if meta, err := extractChartMeta(rewrittenData); err != nil {
+				m.log.Printf("warning: rewritten chart is unreadable, serving the original: %v", err)
+			} else {
+				manifestData, chartMeta = rewrittenData, meta
+				if m.config.Debug {
+					m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
+				}
 			}
 		}
-	}
-
-	// Extract chart metadata from the tarball to populate the OCI config layer
-	// This provides the Chart.yaml contents as required by the Helm OCI spec
-	chartMeta, err := extractChartMeta(manifestData)
-	if err != nil {
-		m.log.Printf("warning: failed to extract chart metadata: %v, using empty config", err)
-		chartMeta = nil
 	}
 
 	// Set deterministic timestamp for OCI manifest to ensure reproducible artifacts
@@ -219,15 +233,9 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	memStore := memory.New()
 
-	var configData []byte
-	if chartMeta != nil {
-		configData, err = json.Marshal(chartMeta)
-		if err != nil {
-			m.log.Printf("warning: failed to marshal chart metadata: %v, using empty config", err)
-			configData = []byte("{}")
-		}
-	} else {
-		configData = []byte("{}")
+	configData, err := json.Marshal(chartMeta)
+	if err != nil {
+		return errors.RegErrInternal(err)
 	}
 
 	desc := ocispec.Descriptor{
@@ -331,11 +339,12 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 }
 
 var (
-	indexParses          = expvar.NewInt("index_parses")
-	indexParseMs         = expvar.NewInt("index_parse_ms")
-	indexDownloads       = expvar.NewInt("index_downloads")
-	chartsPrepared       = expvar.NewInt("charts_prepared")
-	chartPrepareAttempts = expvar.NewInt("chart_prepare_attempts")
+	indexParses           = expvar.NewInt("index_parses")
+	indexParseMs          = expvar.NewInt("index_parse_ms")
+	indexDownloads        = expvar.NewInt("index_downloads")
+	chartsPrepared        = expvar.NewInt("charts_prepared")
+	chartPrepareAttempts  = expvar.NewInt("chart_prepare_attempts")
+	chartDigestMismatches = expvar.NewInt("chart_digest_mismatches")
 )
 
 func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
@@ -452,12 +461,84 @@ func (m *Manifests) download(rawURL string) ([]byte, error) {
 	// index.yaml can point anywhere; plain http would undermine both integrity
 	// and the private-network dial guard.
 	if parsed.Scheme != "https" {
-		return nil, fmt.Errorf("refusing non-https download URL %q", rawURL)
+		return nil, &policyError{fmt.Sprintf("refusing non-https download URL %q", rawURL)}
 	}
 	resp, err := m.httpClient.Get(rawURL)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// Drain a bounded amount so the connection can be reused.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		return nil, &upstreamStatusError{url: rawURL, status: resp.StatusCode}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxDownloadSize {
+		return nil, fmt.Errorf("upstream %s response exceeds %d bytes", rawURL, maxDownloadSize)
+	}
+	return data, nil
+}
+
+// maxDownloadSize bounds every upstream body held in memory. The largest index
+// seen in production (bitnami) is 27.5MB, and helm refuses charts that
+// decompress to more than 100MiB, so a larger body is never usable.
+var maxDownloadSize int64 = 100 << 20
+
+type upstreamStatusError struct {
+	url    string
+	status int
+}
+
+func (e *upstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream %s returned HTTP %d", e.url, e.status)
+}
+
+// downloadError maps a failed upstream download to the registry response.
+// Missing content answers 404 with notFoundCode, a refusal by the proxy's own
+// policy answers 403, and every other failure is the upstream's fault.
+func downloadError(err error, notFoundCode string) *errors.RegError {
+	var pe *policyError
+	if stderrors.As(err, &pe) {
+		return &errors.RegError{Status: http.StatusForbidden, Code: "DENIED", Message: err.Error()}
+	}
+	var se *upstreamStatusError
+	if stderrors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone) {
+		return &errors.RegError{Status: http.StatusNotFound, Code: notFoundCode, Message: err.Error()}
+	}
+	var de *net.DNSError
+	if stderrors.As(err, &de) && de.IsNotFound {
+		return &errors.RegError{Status: http.StatusNotFound, Code: notFoundCode, Message: err.Error()}
+	}
+	return &errors.RegError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: err.Error()}
+}
+
+func isGzip(data []byte) bool {
+	return len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b
+}
+
+// checkIndexDigest compares the tarball with the digest published in
+// index.yaml. A mismatch is only reported: Helm does not verify this digest on
+// pull, and about 7% of versions in large public indexes carry a stale one
+// while their tarball is fine.
+func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, data []byte) {
+	if chartVer.Digest == "" {
+		return
+	}
+	algo, want, ok := strings.Cut(chartVer.Digest, ":")
+	if !ok {
+		algo, want = "sha256", chartVer.Digest
+	}
+	if !strings.EqualFold(algo, "sha256") {
+		return
+	}
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	if !strings.EqualFold(want, got) {
+		chartDigestMismatches.Add(1)
+		m.log.Printf("warning: %s@%s: index digest %s does not match tarball sha256 %s", chartVer.Name, chartVer.Version, chartVer.Digest, got)
+	}
 }

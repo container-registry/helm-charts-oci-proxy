@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// policyError marks a download the proxy refused on purpose.
+type policyError struct{ msg string }
+
+func (e *policyError) Error() string { return e.msg }
+
 // newDownloadClient returns the HTTP client for upstream chart repository
 // requests. Unless allowPrivate is set, connections to non-public addresses are
 // refused so a crafted repo path or index.yaml cannot turn the proxy into an
@@ -24,10 +29,10 @@ func newDownloadClient(allowPrivate bool) *http.Client {
 		dialer.Control = func(_, address string, _ syscall.RawConn) error {
 			ap, err := netip.ParseAddrPort(address)
 			if err != nil {
-				return fmt.Errorf("refusing to dial unparsable address %q: %w", address, err)
+				return &policyError{fmt.Sprintf("refusing to dial unparsable address %q: %v", address, err)}
 			}
 			if !isPublicAddr(ap.Addr()) {
-				return fmt.Errorf("refusing to dial non-public address %s (set ALLOW_PRIVATE_NETWORKS=true to permit)", ap.Addr())
+				return &policyError{fmt.Sprintf("refusing to dial non-public address %s (set ALLOW_PRIVATE_NETWORKS=true to permit)", ap.Addr())}
 			}
 			return nil
 		}
@@ -39,7 +44,7 @@ func newDownloadClient(allowPrivate bool) *http.Client {
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if req.URL.Scheme != "https" {
-				return fmt.Errorf("refusing redirect to non-https URL %q", req.URL)
+				return &policyError{fmt.Sprintf("refusing redirect to non-https URL %q", req.URL)}
 			}
 			// A non-nil CheckRedirect replaces the client's default 10-hop limit.
 			if len(via) >= 10 {
