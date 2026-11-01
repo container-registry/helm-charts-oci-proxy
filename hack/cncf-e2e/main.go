@@ -52,8 +52,11 @@ func main() {
 		log.Fatal("-concurrency and -per-host must be positive")
 	}
 	var onlyRe *regexp.Regexp
+	var err error
 	if *only != "" {
-		onlyRe = regexp.MustCompile(*only)
+		if onlyRe, err = regexp.Compile(*only); err != nil {
+			log.Fatalf("-only: %v", err)
+		}
 	}
 	pu, err := url.Parse(strings.TrimSuffix(*proxy, "/"))
 	if err != nil || pu.Host == "" || (pu.Scheme != "http" && pu.Scheme != "https") {
