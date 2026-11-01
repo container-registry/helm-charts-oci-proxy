@@ -180,6 +180,14 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
+	// The chart already lives in an OCI registry; there is no tarball to convert.
+	if u.Scheme == "oci" {
+		return &errors.RegError{
+			Status:  http.StatusNotFound,
+			Code:    "MANIFEST_UNKNOWN",
+			Message: fmt.Sprintf("chart %s version %s is published only as OCI artifact %s; pull it from there", chartVer.Name, chartVer.Version, chartVer.URLs[0]),
+		}
+	}
 	downloadUrl := u.String()
 
 	chartPrepareAttempts.Add(1)

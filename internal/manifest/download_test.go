@@ -120,6 +120,49 @@ func TestPrepareChart_UpstreamErrorIsNeverPackaged(t *testing.T) {
 	}
 }
 
+// An index entry that points to an OCI registry cannot be converted. Before
+// this change the proxy refused the oci:// URL as a non-https download and
+// answered 500, which clients and Harbor treat as a server fault and retry.
+func TestPrepareChart_OCIChartURLIsNotFound(t *testing.T) {
+	var downloads int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/index.yaml", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `apiVersion: v1
+entries:
+  demo:
+    - apiVersion: v2
+      name: demo
+      version: 1.0.0
+      urls:
+        - oci://registry.example.com/charts/demo:1.0.0
+`)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		downloads++
+		w.WriteHeader(http.StatusTeapot)
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m.httpClient = srv.Client()
+	repo := strings.TrimPrefix(srv.URL, "https://") + "/demo"
+
+	rec, err := getManifest(t, m, repo)
+	if err == nil {
+		t.Fatalf("expected an error, got status %d", rec.Code)
+	}
+	if got := regStatus(t, err); got != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 (%v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "oci://registry.example.com/charts/demo:1.0.0") {
+		t.Errorf("error does not name the OCI location: %v", err)
+	}
+	if downloads != 0 {
+		t.Errorf("%d upstream requests besides the index", downloads)
+	}
+}
+
 // Helm does not verify the index digest on pull, and public indexes carry
 // stale digests for working tarballs, so a mismatch must not fail the pull.
 func TestPrepareChart_IndexDigestMismatchIsObservedOnly(t *testing.T) {
