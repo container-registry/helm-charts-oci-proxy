@@ -61,8 +61,9 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			}
 
 			debug, _ := env.GetBool("DEBUG", false)
-			cacheTTL, _ := env.GetInt("MANIFEST_CACHE_TTL", 60)              // 1 minute
-			indexCacheTTL, _ := env.GetInt("INDEX_CACHE_TTL", 3600*4)        // 4 hours
+			cacheTTL, _ := env.GetInt("MANIFEST_CACHE_TTL", 60)       // 1 minute
+			indexCacheTTL, _ := env.GetInt("INDEX_CACHE_TTL", 3600*4) // 4 hours
+			indexCacheMiB, _ := env.GetInt("INDEX_CACHE_SIZE_MIB", 128)
 			indexErrorCacheTTL, _ := env.GetInt("INDEX_ERROR_CACHE_TTL", 30) // 30 seconds
 
 			rewriteDeps, _ := env.GetBool("REWRITE_DEPENDENCIES", false)
@@ -83,9 +84,11 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			// DIAG_ADDR serves pprof and expvar on a separate listener; keep it off the public port.
 			diagAddr := env.GetString("DIAG_ADDR", "")
 			indexCache, err := ristretto.NewCache(&ristretto.Config{
-				NumCounters: 1e7,       // number of keys to track frequency of (10M).
-				MaxCost:     100000000, // maximum cost of cache (1GB).
-				BufferItems: 64,        // number of keys per Get buffer.
+				// One key per chart repository; 10x the expected key count, as
+				// ristretto recommends. 1e7 counters cost a fixed 48MiB of heap.
+				NumCounters: 1e4,
+				MaxCost:     int64(indexCacheMiB) << 20,
+				BufferItems: 64,
 				Metrics:     diagAddr != "",
 			})
 			if err != nil {

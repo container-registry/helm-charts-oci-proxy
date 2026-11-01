@@ -326,16 +326,15 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 	if !ok || c == nil {
 		// nothing in the cache
 		res := &cacheResp{}
-		res.c, res.err = m.downloadIndex(repoURLPath)
+		var size int
+		res.c, size, res.err = m.downloadIndex(repoURLPath)
 
 		var ttl = m.config.IndexCacheTTL
 		if res.err != nil {
 			// cache error too to avoid external resource exhausting
 			ttl = m.config.IndexErrorCacheTTl
 		}
-		// Use higher cost for parsed IndexFile structs to ensure proper cache admission
-		// See: https://github.com/container-registry/helm-charts-oci-proxy/issues/11
-		m.cache.SetWithTTL(repoURLPath, res, 100000, ttl)
+		m.cache.SetWithTTL(repoURLPath, res, indexCost(size), ttl)
 		return res.c, res.err
 	}
 
@@ -355,20 +354,31 @@ var (
 	chartDigestMismatches = expvar.NewInt("chart_digest_mismatches")
 )
 
-func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
+func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, int, error) {
 	url := fmt.Sprintf("https://%s/index.yaml", repoURLPath)
 	if m.config.Debug {
 		m.log.Printf("download index: %s\n", url)
 	}
-	data, err := m.getIndexBytes(url)
+	indexDownloads.Add(1)
+	data, err := m.download(url)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return ParseIndex(data)
+	idx, err := ParseIndex(data)
+	return idx, len(data), err
 }
 
-// ParseIndex decodes and normalises a chart repository index the way the proxy
-// resolves chart versions from it.
+// indexCost is the cache cost of a parsed index downloaded as size bytes.
+// Measured retained heap is 1.6x to 1.7x the YAML size (bitnami 27.5MB -> 44MiB,
+// prometheus-community 6.6MB -> 9.8MiB); 2x keeps the bound conservative.
+// Error entries cost 1 so they never push out a parsed index.
+func indexCost(size int) int64 {
+	if size <= 0 {
+		return 1
+	}
+	return 2 * int64(size)
+}
+
 // ignoreSkippableChartValidationError is unexported in helm's repo package;
 // this copy keeps the same exception (helm/helm#12748: JFrog strips aliases).
 func ignoreSkippableChartValidationError(err error) error {
@@ -382,6 +392,8 @@ func ignoreSkippableChartValidationError(err error) error {
 	return err
 }
 
+// ParseIndex decodes and normalises a chart repository index the way the proxy
+// resolves chart versions from it.
 func ParseIndex(data []byte) (*repo.IndexFile, error) {
 	indexParses.Add(1)
 	defer func(t time.Time) { indexParseMs.Add(time.Since(t).Milliseconds()) }(time.Now())
@@ -419,43 +431,6 @@ func ParseIndex(data []byte) (*repo.IndexFile, error) {
 		return i, repo.ErrNoAPIVersion
 	}
 	return i, nil
-}
-
-func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
-
-	type cacheResp struct {
-		c   []byte
-		err error
-	}
-
-	c, ok := m.cache.Get(url)
-
-	if !ok || c == nil {
-		// nothing in the cache
-		res := &cacheResp{}
-		indexDownloads.Add(1)
-		res.c, res.err = m.download(url)
-
-		var ttl = m.config.IndexCacheTTL
-		if res.err != nil {
-			// cache error too to avoid external resource exhausting
-			ttl = m.config.IndexErrorCacheTTl
-		}
-		// Use actual byte size as cost for proper cache admission
-		cost := int64(len(res.c))
-		if cost < 1 {
-			cost = 1 // minimum cost for error entries
-		}
-		m.cache.SetWithTTL(url, res, cost, ttl)
-		return res.c, res.err
-	}
-
-	res, ok := c.(*cacheResp)
-	if !ok {
-		return nil, fmt.Errorf("internal error")
-	}
-	return res.c, res.err
-
 }
 
 func (m *Manifests) download(rawURL string) ([]byte, error) {
