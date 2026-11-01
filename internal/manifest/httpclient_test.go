@@ -44,7 +44,7 @@ func TestDownloadClientBlocksPrivateDial(t *testing.T) {
 
 func TestDownloadRejectsNonHTTPS(t *testing.T) {
 	m := &Manifests{config: Config{}, httpClient: newDownloadClient(false)}
-	if _, err := m.download("http://169.254.169.254/latest/meta-data/"); err == nil || !strings.Contains(err.Error(), "non-https") {
+	if _, err := m.download(t.Context(), "http://169.254.169.254/latest/meta-data/"); err == nil || !strings.Contains(err.Error(), "non-https") {
 		t.Fatalf("expected non-https refusal, got: %v", err)
 	}
 }

@@ -182,7 +182,8 @@ There are not many options in configure the application except the following.
 * `MANIFEST_CACHE_TTL` - for how long we have stores manifest and its related blobs, the default value is `60` seconds.
 * `INDEX_CACHE_TTL` - for how long we store chart index file content, the default value is `14400` seconds (4h)
 * `INDEX_CACHE_SIZE_MIB` - size budget in MiB for cached index files. A parsed index is charged twice its YAML size, and one larger than the budget is charged the whole budget; the largest public index (bitnami, 27.5MB) takes about 55MiB. Indexes still in use by in-flight requests or being parsed are outside the budget, so it is not a hard memory limit. Default `128`, valid from 1 to 1048576.
-* `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. The default value is `30` seconds.
+* `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. Also how long a chart version that does not exist upstream (404 or 410), or that the proxy refuses to fetch (403, e.g. a non-https URL), is answered from memory. Other upstream failures are retried on the next request. The default value is `30` seconds.
+* `PREPARE_CONCURRENCY` - how many chart versions are downloaded and converted at once. Each holds an upstream connection, and with dependency rewriting the whole tarball, while it runs. Requests for one version share one preparation. Default `4`.
 * `USE_TLS` - enabled HTTP over TLS
 * `CERT_FILE` - TLS certificate path when `USE_TLS` is set, default `certs/registry.pem`
 * `KEY_FILE` - TLS private key path when `USE_TLS` is set, default `certs/registry-key.pem`

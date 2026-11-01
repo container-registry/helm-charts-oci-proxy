@@ -4,30 +4,24 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	stderrors "errors"
 	"expvar"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
-	helmregistry "helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/repo"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
-	"oras.land/oras-go/v2"
-	"oras.land/oras-go/v2/content/memory"
-	"path/filepath"
 	"sigs.k8s.io/yaml"
-	"strings"
-	"time"
 )
 
 // extractChartMeta extracts metadata from a Helm chart archive.
@@ -191,30 +185,27 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	downloadUrl := u.String()
 
-	manifestData, err := m.download(downloadUrl)
+	// Dependency rewriting changes the tarball, so only that path buffers it.
+	if !rewriteOpts.Enabled || rewriteOpts.ProxyHost == "" {
+		return m.prepareStreamed(ctx, path, chartVer, downloadUrl, reference)
+	}
+
+	manifestData, err := m.download(ctx, downloadUrl)
 	if err != nil {
 		return downloadError(err, "MANIFEST_UNKNOWN")
 	}
 	// Some hosts answer 200 with an HTML page for missing files; packaging that
 	// would hand clients a chart that cannot be installed.
 	if !isGzip(manifestData) {
-		return &errors.RegError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_ERROR",
-			Message: fmt.Sprintf("upstream %s did not return a gzip chart archive", downloadUrl),
-		}
+		return upstreamError("upstream %s did not return a gzip chart archive", downloadUrl)
 	}
-	m.checkIndexDigest(chartVer, manifestData)
+	m.checkIndexDigest(chartVer, digest.FromBytes(manifestData).Encoded())
 
 	// A gzip header alone does not make a chart: a truncated archive or
 	// gzip-compressed HTML passes isGzip but cannot be installed.
 	chartMeta, err := extractChartMeta(manifestData)
 	if err != nil {
-		return &errors.RegError{
-			Status:  http.StatusBadGateway,
-			Code:    "UPSTREAM_ERROR",
-			Message: fmt.Sprintf("upstream %s did not return a valid chart archive: %v", downloadUrl, err),
-		}
+		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadUrl, err)
 	}
 
 	if rewriteOpts.Enabled && rewriteOpts.ProxyHost != "" {
@@ -234,84 +225,8 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		}
 	}
 
-	// Set deterministic timestamp for OCI manifest to ensure reproducible artifacts
-	deterministicTime := getDeterministicCreatedTimestamp(chartVer)
-	packOpts := oras.PackOptions{
-		ManifestAnnotations: generateOCIAnnotations(chartMeta, deterministicTime),
-	}
-	memStore := memory.New()
-
-	configData, err := json.Marshal(chartMeta)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-
-	desc := ocispec.Descriptor{
-		MediaType: helmregistry.ConfigMediaType,
-		Digest:    digest.FromBytes(configData),
-		Size:      int64(len(configData)),
-		Annotations: map[string]string{
-			ocispec.AnnotationTitle: "$config",
-		},
-	}
-
-	err = memStore.Push(ctx, desc, bytes.NewReader(configData))
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-
-	desc.Annotations = packOpts.ConfigAnnotations
-	packOpts.ConfigDescriptor = &desc
-	packOpts.PackImageManifest = true
-	name := filepath.Clean(filepath.Base(downloadUrl))
-
-	manifestFile := ocispec.Descriptor{
-		MediaType: helmregistry.ChartLayerMediaType,
-		Digest:    digest.FromBytes(manifestData),
-		Size:      int64(len(manifestData)),
-		Annotations: map[string]string{
-			ocispec.AnnotationTitle: name,
-		},
-	}
-
-	err = memStore.Push(ctx, manifestFile, bytes.NewReader(manifestData))
-	copyOptions := oras.DefaultCopyOptions
-	copyOptions.Concurrency = 1
-
-	root, err := oras.Pack(ctx, memStore, "", []ocispec.Descriptor{manifestFile}, packOpts)
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	if err = memStore.Tag(ctx, root, root.Digest.String()); err != nil {
-		return errors.RegErrInternal(err)
-	}
-
-	var refs []string
-
-	copyOptions.PreCopy = func(ctx context.Context, desc ocispec.Descriptor) error {
-		if desc.MediaType == ocispec.MediaTypeImageManifest {
-			// oci manifest
-			for k, ref := range refs {
-				desc.Annotations[fmt.Sprintf("%s%d", ProxyRefAnnotationPrefix, k)] = ref
-			}
-		} else {
-			refs = append(refs, desc.Digest.String())
-		}
-		return nil
-	}
-
-	dst := NewInternalDst(fmt.Sprintf("%s/%s", path, chartVer.Name), m.blobHandler.(handler.BlobPutHandler), m)
-	// push
-	if reference == "" {
-		err = oras.CopyGraph(ctx, memStore, dst, root, copyOptions.CopyGraphOptions)
-	} else {
-		_, err = oras.Copy(ctx, memStore, root.Digest.String(), dst, reference, copyOptions)
-	}
-	if err != nil {
-		return errors.RegErrInternal(err)
-	}
-	chartsPrepared.Add(1)
-	return nil
+	layer := layerDescriptor(downloadUrl, digest.FromBytes(manifestData), int64(len(manifestData)))
+	return m.storeChart(ctx, path, chartVer, reference, chartMeta, layer, manifestData, "")
 }
 
 func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
@@ -324,17 +239,31 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 	c, ok := m.cache.Get(repoURLPath)
 
 	if !ok || c == nil {
-		// nothing in the cache
-		res := &cacheResp{}
-		var size int
-		res.c, size, res.err = m.downloadIndex(repoURLPath)
-
-		var ttl = m.config.IndexCacheTTL
-		if res.err != nil {
-			// cache error too to avoid external resource exhausting
-			ttl = m.config.IndexErrorCacheTTl
-		}
-		m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+		// Concurrent misses for one repository share a single download and parse.
+		v, _, _ := m.indexes.Do(repoURLPath, func() (interface{}, error) {
+			// A caller that missed just before an earlier flight finished.
+			if cached, ok := m.cache.Get(repoURLPath); ok {
+				if res, ok := cached.(*cacheResp); ok {
+					return res, nil
+				}
+			}
+			res := &cacheResp{}
+			var size int
+			res.c, size, res.err = m.downloadIndex(repoURLPath)
+			ttl := m.config.IndexCacheTTL
+			if res.err != nil {
+				// cache error too to avoid external resource exhausting
+				ttl = m.config.IndexErrorCacheTTl
+			}
+			m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+			// ristretto applies writes asynchronously; without waiting, a request
+			// right after this flight ends would miss and parse the index again.
+			if w, ok := m.cache.(interface{ Wait() }); ok {
+				w.Wait()
+			}
+			return res, nil
+		})
+		res := v.(*cacheResp)
 		return res.c, res.err
 	}
 
@@ -360,7 +289,7 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, int, err
 		m.log.Printf("download index: %s\n", url)
 	}
 	indexDownloads.Add(1)
-	data, err := m.download(url)
+	data, err := m.download(context.Background(), url)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -448,7 +377,18 @@ func ParseIndex(data []byte) (*repo.IndexFile, error) {
 	return i, nil
 }
 
-func (m *Manifests) download(rawURL string) ([]byte, error) {
+// openUpstream starts a GET to an upstream chart repository and returns the
+// body of a 2xx response.
+func (m *Manifests) openUpstream(ctx context.Context, rawURL string) (io.ReadCloser, error) {
+	return m.get(ctx, m.httpClient, rawURL)
+}
+
+// openLayer streams a chart layer to a client; see newLayerClient.
+func (m *Manifests) openLayer(ctx context.Context, rawURL string) (io.ReadCloser, error) {
+	return m.get(ctx, m.layerClient, rawURL)
+}
+
+func (m *Manifests) get(ctx context.Context, c *http.Client, rawURL string) (io.ReadCloser, error) {
 	if m.config.Debug {
 		m.log.Printf("downloading : %s\n", rawURL)
 	}
@@ -461,17 +401,30 @@ func (m *Manifests) download(rawURL string) ([]byte, error) {
 	if parsed.Scheme != "https" {
 		return nil, &policyError{fmt.Sprintf("refusing non-https download URL %q", rawURL)}
 	}
-	resp, err := m.httpClient.Get(rawURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		// Drain a bounded amount so the connection can be reused.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
 		return nil, &upstreamStatusError{url: rawURL, status: resp.StatusCode}
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
+	return resp.Body, nil
+}
+
+func (m *Manifests) download(ctx context.Context, rawURL string) ([]byte, error) {
+	body, err := m.openUpstream(ctx, rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	data, err := io.ReadAll(io.LimitReader(body, maxDownloadSize+1))
 	if err != nil {
 		return nil, err
 	}
@@ -481,9 +434,9 @@ func (m *Manifests) download(rawURL string) ([]byte, error) {
 	return data, nil
 }
 
-// maxDownloadSize bounds every upstream body held in memory. The largest index
-// seen in production (bitnami) is 27.5MB, and helm refuses charts that
-// decompress to more than 100MiB, so a larger body is never usable.
+// maxDownloadSize bounds every upstream body. The largest index seen in
+// production (bitnami) is 27.5MB, and helm refuses charts that decompress to
+// more than 100MiB, so a larger body is never usable.
 var maxDownloadSize int64 = 100 << 20
 
 type upstreamStatusError struct {
@@ -522,7 +475,7 @@ func isGzip(data []byte) bool {
 // index.yaml. A mismatch is only reported: Helm does not verify this digest on
 // pull, and about 7% of versions in large public indexes carry a stale one
 // while their tarball is fine.
-func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, data []byte) {
+func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, got string) {
 	if chartVer.Digest == "" {
 		return
 	}
@@ -533,8 +486,6 @@ func (m *Manifests) checkIndexDigest(chartVer *repo.ChartVersion, data []byte) {
 	if !strings.EqualFold(algo, "sha256") {
 		return
 	}
-	sum := sha256.Sum256(data)
-	got := hex.EncodeToString(sum[:])
 	if !strings.EqualFold(want, got) {
 		chartDigestMismatches.Add(1)
 		m.log.Printf("warning: %s@%s: index digest %s does not match tarball sha256 %s", chartVer.Name, chartVer.Version, chartVer.Digest, got)

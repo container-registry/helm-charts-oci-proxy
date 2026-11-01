@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,11 +16,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 )
 
 type Catalog struct {
@@ -40,25 +43,42 @@ type Manifest struct {
 
 type Manifests struct {
 	// maps repo -> Manifest tag/digest -> Manifest
-	manifests   map[string]map[string]Manifest
-	lock        sync.Mutex
+	manifests map[string]map[string]Manifest
+	mu        sync.RWMutex // guards manifests; never held during network I/O
+	// copyMu keeps cleanup from deleting content-addressed blobs that a
+	// preparation has just Put but not yet referenced from a manifest.
+	copyMu      sync.RWMutex
+	prepares    singleflight.Group
+	indexes     singleflight.Group
+	slots       chan struct{}
+	failures    *failureCache
 	log         logrus.StdLogger
 	cache       Cache
 	blobHandler handler.BlobHandler
+	blobs       *streamBlobs
 	config      Config
 	httpClient  *http.Client
+	layerClient *http.Client
 }
 
 func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
+	concurrency := config.PrepareConcurrency
+	if concurrency <= 0 {
+		concurrency = defaultPrepareConcurrency
+	}
 	ma := &Manifests{
-
 		manifests:   map[string]map[string]Manifest{},
 		blobHandler: blobHandler,
 		log:         log,
 		config:      config,
 		cache:       cache,
 		httpClient:  newDownloadClient(config.AllowPrivateNetworks),
+		slots:       make(chan struct{}, concurrency),
+		failures:    newFailureCache(config.IndexErrorCacheTTl),
 	}
+	ma.layerClient = newLayerClient(ma.httpClient)
+	ma.blobs = newStreamBlobs(blobHandler, ma.openLayer)
+	ma.blobHandler = ma.blobs
 
 	go func() {
 		ticker := time.NewTicker(time.Minute)
@@ -66,33 +86,7 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		for {
 			select {
 			case <-ticker.C:
-				if ma.config.Debug {
-					ma.log.Println("cleanup cycle")
-				}
-				ma.lock.Lock()
-				for _, m := range ma.manifests {
-					for k, v := range m {
-						if v.CreatedAt.Before(time.Now().Add(-ma.config.CacheTTL)) {
-							// delete
-							delete(m, k)
-							if delHandler, ok := ma.blobHandler.(handler.BlobDeleteHandler); ok {
-								for _, ref := range v.Refs {
-									h, err := v1.NewHash(ref)
-									if err != nil {
-										continue
-									}
-									if ma.config.Debug {
-										log.Printf("deleting blob %s", h.String())
-									}
-									if err = delHandler.Delete(ctx, "", h); err != nil {
-										log.Println(err)
-									}
-								}
-							}
-						}
-					}
-				}
-				ma.lock.Unlock()
+				ma.cleanup(ctx)
 			case <-ctx.Done():
 				return
 			}
@@ -100,6 +94,64 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 	}()
 
 	return ma
+}
+
+// cleanup drops expired manifests. A blob is deleted only when no remaining
+// manifest references it: the digest and tag entries of one chart, and charts
+// that share a tarball, reference the same content-addressed blobs.
+func (m *Manifests) cleanup(ctx context.Context) {
+	if m.config.Debug {
+		m.log.Println("cleanup cycle")
+	}
+	m.copyMu.Lock()
+	defer m.copyMu.Unlock()
+
+	cutoff := time.Now().Add(-m.config.CacheTTL)
+	expired := map[string]struct{}{}
+	live := map[string]struct{}{}
+	m.mu.Lock()
+	for repo, entries := range m.manifests {
+		for k, v := range entries {
+			refs := live
+			if v.CreatedAt.Before(cutoff) {
+				delete(entries, k)
+				refs = expired
+			}
+			for _, r := range v.Refs {
+				refs[r] = struct{}{}
+			}
+		}
+		if len(entries) == 0 {
+			delete(m.manifests, repo)
+		}
+	}
+	m.mu.Unlock()
+
+	del, ok := m.blobHandler.(handler.BlobDeleteHandler)
+	if !ok {
+		return
+	}
+	for ref := range expired {
+		if _, inUse := live[ref]; inUse {
+			continue
+		}
+		h, err := v1.NewHash(ref)
+		if err != nil {
+			continue
+		}
+		if m.config.Debug {
+			m.log.Printf("deleting blob %s", h.String())
+		}
+		if err := del.Delete(ctx, "", h); err != nil && !stderrors.Is(err, blobs.ErrNotFound) {
+			m.log.Println(err)
+		}
+	}
+}
+
+// Blobs is the blob handler to serve: local blobs plus chart layers streamed
+// from their upstream.
+func (m *Manifests) Blobs() handler.BlobHandler {
+	return m.blobs
 }
 
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
@@ -138,41 +190,10 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	rewriteOpts := m.getRewriteOptions(req)
 
 	switch req.Method {
-	case http.MethodGet:
-		m.lock.Lock()
-		defer m.lock.Unlock()
-
-		var prepared bool
-
-		c, ok := m.manifests[repo]
-		if !ok {
-			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-			if err != nil {
-				return err
-			}
-			prepared = true
-			// re-find
-			c = m.manifests[repo]
-		}
-
-		ma, ok := c[target]
-		if !ok {
-			if !prepared {
-				err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-				if err != nil {
-					return err
-				}
-			}
-
-			ma, ok = c[target]
-			if !ok {
-				// we failed
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "MANIFEST_UNKNOWN",
-					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
-				}
-			}
+	case http.MethodGet, http.MethodHead:
+		ma, err := m.manifest(req.Context(), repo, target, rewriteOpts)
+		if err != nil {
+			return err
 		}
 		rd := sha256.Sum256(ma.Blob)
 		d := "sha256:" + hex.EncodeToString(rd[:])
@@ -180,43 +201,12 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 		resp.Header().Set("Content-Type", ma.ContentType)
 		resp.Header().Set("Content-Length", fmt.Sprint(len(ma.Blob)))
 		resp.WriteHeader(http.StatusOK)
-		_, err := io.Copy(resp, bytes.NewReader(ma.Blob))
-		if err != nil {
+		if req.Method == http.MethodHead {
+			return nil
+		}
+		if _, err := io.Copy(resp, bytes.NewReader(ma.Blob)); err != nil {
 			return errors.RegErrInternal(err)
 		}
-		return nil
-
-	case http.MethodHead:
-		m.lock.Lock()
-		defer m.lock.Unlock()
-		if _, ok := m.manifests[repo]; !ok {
-
-			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-			if err != nil {
-				return err
-			}
-		}
-		ma, ok := m.manifests[repo][target]
-		if !ok {
-			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-			if err != nil {
-				return err
-			}
-			ma, ok = m.manifests[repo][target]
-			if !ok {
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "MANIFEST_UNKNOWN",
-					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
-				}
-			}
-		}
-		rd := sha256.Sum256(ma.Blob)
-		d := "sha256:" + hex.EncodeToString(rd[:])
-		resp.Header().Set("Docker-Content-Digest", d)
-		resp.Header().Set("Content-Type", ma.ContentType)
-		resp.Header().Set("Content-Length", fmt.Sprint(len(ma.Blob)))
-		resp.WriteHeader(http.StatusOK)
 		return nil
 
 	default:
@@ -266,9 +256,6 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 			Message: "We don't understand your method + url",
 		}
 	}
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
 	// Determine rewrite options from config and query params
 	rewriteOpts := m.getRewriteOptions(req)
 
@@ -296,14 +283,14 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	}
 
 	if !fromIndex {
-		c, ok := m.manifests[fullRepo]
-		if !ok {
-			if err := m.prepareChart(req.Context(), fullRepo, "", rewriteOpts); err != nil {
+		names := m.names(fullRepo)
+		if len(names) == 0 {
+			if err := m.prepare(req.Context(), fullRepo, "", rewriteOpts); err != nil {
 				return err
 			}
-			c = m.manifests[fullRepo]
+			names = m.names(fullRepo)
 		}
-		for tag := range c {
+		for _, tag := range names {
 			if !strings.Contains(tag, "sha256:") {
 				tags = append(tags, helper.VersionToTag(tag))
 			}
@@ -351,6 +338,8 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 }
 
 func (m *Manifests) Read(repo string, name string) (Manifest, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	mRepo, ok := m.manifests[repo]
 	if !ok {
@@ -364,6 +353,8 @@ func (m *Manifests) Read(repo string, name string) (Manifest, error) {
 }
 
 func (m *Manifests) Write(repo string, name string, n Manifest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	mRepo, ok := m.manifests[repo]
 	if !ok {
@@ -416,8 +407,8 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) e
 		}
 
 	} else {
-		m.lock.Lock()
-		defer m.lock.Unlock()
+		m.mu.RLock()
+		defer m.mu.RUnlock()
 
 		// TODO: implement pagination
 		for key := range m.manifests {
