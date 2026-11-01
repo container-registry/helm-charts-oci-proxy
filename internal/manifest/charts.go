@@ -161,7 +161,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		downloadUrl = fmt.Sprintf("https://%s/%s", path, chartVer.URLs[0])
 	}
 
-	chartsPrepared.Add(1)
+	chartPrepareAttempts.Add(1)
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
 		return errors.RegErrInternal(err)
@@ -271,6 +271,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
+	chartsPrepared.Add(1)
 	return nil
 }
 
@@ -307,10 +308,11 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 }
 
 var (
-	indexParses    = expvar.NewInt("index_parses")
-	indexParseMs   = expvar.NewInt("index_parse_ms")
-	indexDownloads = expvar.NewInt("index_downloads")
-	chartsPrepared = expvar.NewInt("charts_prepared")
+	indexParses          = expvar.NewInt("index_parses")
+	indexParseMs         = expvar.NewInt("index_parse_ms")
+	indexDownloads       = expvar.NewInt("index_downloads")
+	chartsPrepared       = expvar.NewInt("charts_prepared")
+	chartPrepareAttempts = expvar.NewInt("chart_prepare_attempts")
 )
 
 func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {

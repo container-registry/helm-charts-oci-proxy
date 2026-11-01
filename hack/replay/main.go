@@ -52,9 +52,12 @@ func main() {
 	target := flag.String("target", "", "PID, or docker:<container> to read cgroup memory")
 	out := flag.String("out", "replay-out", "output directory")
 	speed := flag.Float64("speed", 1, "time compression factor")
-	maxConc := flag.Int("max-concurrency", 512, "cap on in-flight requests")
+	maxConc := flag.Int("max-concurrency", 2048, "cap on in-flight requests; requests due while it is reached are dropped and counted")
 	timeout := flag.Duration("timeout", 60*time.Second, "per-request client timeout")
 	flag.Parse()
+	if *speed <= 0 || *maxConc <= 0 {
+		log.Fatal("-speed and -max-concurrency must be positive")
+	}
 
 	reqs, err := load(*logFile, *from, *to)
 	if err != nil {
@@ -82,13 +85,21 @@ func main() {
 	var mu sync.Mutex
 	codes := map[int]int{}
 	var wg sync.WaitGroup
+	dropped := 0
 	start := time.Now()
 	for _, r := range reqs {
 		due := time.Duration(float64(r.at.Sub(reqs[0].at)) / *speed)
 		if d := due - time.Since(start); d > 0 {
 			time.Sleep(d)
 		}
-		sem <- struct{}{}
+		// Blocking here would turn the open loop into backpressure exactly when
+		// the proxy is overloaded.
+		select {
+		case sem <- struct{}{}:
+		default:
+			dropped++
+			continue
+		}
 		wg.Add(1)
 		inflight.Add(1)
 		go func(r request) {
@@ -113,7 +124,8 @@ func main() {
 	for _, k := range keys {
 		parts = append(parts, fmt.Sprintf("%d:%d", k, codes[k]))
 	}
-	log.Printf("done in %s status={%s} (0 = client error or timeout)", time.Since(start).Round(time.Second), strings.Join(parts, " "))
+	log.Printf("done in %s status={%s} dropped=%d (0 = client error or timeout, dropped = concurrency cap reached)",
+		time.Since(start).Round(time.Second), strings.Join(parts, " "), dropped)
 }
 
 func load(path, from, to string) ([]request, error) {
@@ -175,6 +187,7 @@ type vars struct {
 	BlobStoreBytes int64 `json:"blob_store_bytes"`
 	BlobStoreBlobs int64 `json:"blob_store_blobs"`
 	ChartsPrepared int64 `json:"charts_prepared"`
+	ChartAttempts  int64 `json:"chart_prepare_attempts"`
 	IndexParses    int64 `json:"index_parses"`
 }
 
@@ -187,7 +200,7 @@ func sample(diag, target, out string, inflight *atomic.Int64, stop <-chan struct
 		log.Fatal(err)
 	}
 	defer f.Close()
-	fmt.Fprintln(f, "t,mem_mib,heap_inuse_mib,heap_sys_mib,num_gc,blob_store_mib,blobs,charts_prepared,index_parses,inflight")
+	fmt.Fprintln(f, "t,mem_mib,heap_inuse_mib,heap_sys_mib,num_gc,blob_store_mib,blobs,charts_prepared,chart_prepare_attempts,index_parses,inflight")
 	c := &http.Client{Timeout: 10 * time.Second}
 	start := time.Now()
 	var peak uint64
@@ -211,9 +224,9 @@ func sample(diag, target, out string, inflight *atomic.Int64, stop <-chan struct
 			continue
 		}
 		const mib = 1 << 20
-		fmt.Fprintf(f, "%.1f,%.0f,%d,%d,%d,%d,%d,%d,%d,%d\n", t, mem,
+		fmt.Fprintf(f, "%.1f,%.0f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n", t, mem,
 			v.MemStats.HeapInuse/mib, v.MemStats.HeapSys/mib, v.MemStats.NumGC,
-			v.BlobStoreBytes/mib, v.BlobStoreBlobs, v.ChartsPrepared, v.IndexParses, inflight.Load())
+			v.BlobStoreBytes/mib, v.BlobStoreBlobs, v.ChartsPrepared, v.ChartAttempts, v.IndexParses, inflight.Load())
 		if v.MemStats.HeapInuse > peak+50*mib {
 			peak = v.MemStats.HeapInuse
 			save(c, diag+"/debug/pprof/heap", filepath.Join(out, "heap-peak.pb.gz"))

@@ -94,10 +94,14 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 
 			if diagAddr != "" {
 				publishCacheMetrics("index_cache", indexCache)
+				diagListener, err := net.Listen("tcp", diagAddr)
+				if err != nil {
+					l.Fatalln(err)
+				}
 				diag := newDiagServer(diagAddr)
 				go func() {
-					l.Printf("diagnostics listening on %s", diagAddr)
-					if err := diag.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+					l.Printf("diagnostics listening on %s", diagListener.Addr())
+					if err := diag.Serve(diagListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 						l.Printf("diagnostics server: %v", err)
 					}
 				}()

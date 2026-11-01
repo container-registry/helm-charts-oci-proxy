@@ -34,7 +34,7 @@ docker run -d --name upstream-mirror --network cpbench --user 0 --entrypoint /mi
   chartproxy:local serve -dir /data -addr :443 -latency 20ms
 
 docker run -d --name chartproxy --network cpbench --memory=1g --memory-swap=1g --cpus=4 \
-  -p 19000:9000 -p 19001:9001 -e DIAG_ADDR=0.0.0.0:9001 -e ALLOW_PRIVATE_NETWORKS=true \
+  -p 127.0.0.1:19000:9000 -p 127.0.0.1:19001:9001 -e DIAG_ADDR=0.0.0.0:9001 -e ALLOW_PRIVATE_NETWORKS=true \
   -e SSL_CERT_FILE=/ca.pem -v "$PWD/mirror/ca.pem:/ca.pem:ro" chartproxy:local
 
 .bin/replay -log ingress.jsonl -from 07:59:16 -to 08:08:14 -target docker:chartproxy -out run

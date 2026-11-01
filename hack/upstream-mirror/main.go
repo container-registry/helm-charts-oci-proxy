@@ -54,6 +54,7 @@ type entry struct {
 type store struct {
 	dir     string
 	mu      sync.Mutex
+	saveMu  sync.Mutex
 	entries map[string]entry
 }
 
@@ -81,13 +82,28 @@ func fetch(args []string) {
 	workers := fs.Int("workers", 16, "parallel chart downloads")
 	dry := fs.Bool("dry-run", false, "download indexes only and report chart counts")
 	_ = fs.Parse(args)
+	if *workers < 1 {
+		log.Fatal("-workers must be at least 1")
+	}
 
 	wanted, err := readRequests(*logFile, *from, *to)
 	if err != nil {
 		log.Fatal(err)
 	}
 	st := loadStore(*dir)
-	client := &http.Client{Timeout: 120 * time.Second}
+	// Same redirect policy as the proxy, so a redirect it refuses is not recorded as a success.
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing redirect to non-https URL %q", req.URL)
+			}
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
 
 	var charts []string
 	seen := map[string]bool{}
@@ -250,6 +266,9 @@ func loadStore(dir string) *store {
 }
 
 func (s *store) save() {
+	// Workers checkpoint concurrently and share one temp file name.
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	s.mu.Lock()
 	data, err := json.Marshal(s.entries)
 	s.mu.Unlock()
@@ -375,7 +394,16 @@ func writeCerts(dir string, hosts []string) error {
 		"tls.key": pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
 	}
 	for name, data := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		perm := os.FileMode(0o644)
+		if name == "tls.key" {
+			perm = 0o600
+		}
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, perm); err != nil {
+			return err
+		}
+		// WriteFile keeps the mode of an existing file.
+		if err := os.Chmod(p, perm); err != nil {
 			return err
 		}
 	}
