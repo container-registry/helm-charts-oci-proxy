@@ -133,8 +133,8 @@ func (k *checker) check(j job) (r Result) {
 		r.Class, r.Reason = classOK, note
 		return r
 	}
-	// The proxy caches 404s and index errors for 30s by default; the delay
-	// lets a transient failure expire before the second attempt.
+	// The proxy caches 404s and index errors for INDEX_ERROR_CACHE_TTL; the
+	// delay lets a transient failure expire before the second attempt.
 	r.FirstFailure = err.Error()
 	time.Sleep(k.retryDelay)
 	ev, err = k.viaProxy(&r, up)

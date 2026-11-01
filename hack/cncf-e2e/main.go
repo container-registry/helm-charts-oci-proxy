@@ -25,6 +25,10 @@ import (
 
 const userAgent = "helm-charts-oci-proxy-cncf-e2e"
 
+// defaultRetryDelay outlasts the proxy's default INDEX_ERROR_CACHE_TTL of 30s
+// (cmd/serve.go), so the retry does not just read back a cached failure.
+const defaultRetryDelay = 35 * time.Second
+
 func main() {
 	proxy := flag.String("proxy", "http://127.0.0.1:19100", "proxy base URL")
 	diag := flag.String("diag", "", "proxy DIAG_ADDR base URL, for Go memstats and counters (optional)")
@@ -41,7 +45,7 @@ func main() {
 	only := flag.String("only", "", "regexp on <repository URL>/<chart>; check only matching charts")
 	label := flag.String("label", "", "name of the build under test, for the summary")
 	timeout := flag.Duration("timeout", 3*time.Minute, "timeout of each HTTP request and helm command")
-	retryDelay := flag.Duration("retry-delay", 10*time.Second, "wait before repeating failed proxy checks")
+	retryDelay := flag.Duration("retry-delay", defaultRetryDelay, "wait before repeating failed proxy checks; must exceed the proxy's INDEX_ERROR_CACHE_TTL")
 	flag.Parse()
 	if *conc < 1 || *perHost < 1 {
 		log.Fatal("-concurrency and -per-host must be positive")

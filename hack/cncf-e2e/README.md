@@ -23,7 +23,8 @@ Results are classified as:
 | `upstream-problem` | index or tarball unreachable, 4xx/5xx, missing entry or invalid archive |
 | `not-applicable` | OCI-only repository or OCI/non-https download URL, which the proxy does not convert |
 
-A failed proxy check is repeated after `-retry-delay` (default 10s), then the upstream is checked again; only a
+A failed proxy check is repeated after `-retry-delay` (default 35s, longer than the proxy's default 30s
+`INDEX_ERROR_CACHE_TTL`; raise it for a proxy configured with a longer TTL), then the upstream is checked again; only a
 failure that repeats against an unchanged upstream counts as `proxy-bug`.
 
 ## Run
