@@ -8,8 +8,8 @@ Per chart (latest version, or every version in the index with `-all-versions`):
 
 1. Upstream reference: `index.yaml` parsed with helm's loader, tarball downloaded from its URL, sha256 computed,
    archive loaded with helm's chart loader.
-2. Manifest by tag and by digest: media types, `Docker-Content-Digest`, a single layer whose digest and size equal
-   the upstream tarball.
+2. Manifest by tag: media types, `Docker-Content-Digest`, a single layer whose digest and size equal the upstream
+   tarball. Manifest by digest: the body is byte-identical to the manifest by tag.
 3. Config blob: digest and size match the manifest, name and version match `Chart.yaml`.
 4. Layer blob: streamed bytes hash to the upstream digest.
 5. `helm pull` and `helm show chart` through the proxy (helm 3; helm 4 prints OCI pull output differently).
