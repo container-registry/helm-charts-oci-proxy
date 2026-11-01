@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"sort"
+
+	"golang.org/x/sync/singleflight"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,7 +43,9 @@ type Manifest struct {
 type Manifests struct {
 	// maps repo -> Manifest tag/digest -> Manifest
 	manifests   map[string]map[string]Manifest
-	lock        sync.Mutex
+	mu          sync.RWMutex // guards manifests only, never held during network I/O
+	prepares    singleflight.Group
+	indexes     singleflight.Group
 	log         logrus.StdLogger
 	cache       Cache
 	blobHandler handler.BlobHandler
@@ -69,7 +73,7 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 				if ma.config.Debug {
 					ma.log.Println("cleanup cycle")
 				}
-				ma.lock.Lock()
+				ma.mu.Lock()
 				for _, m := range ma.manifests {
 					for k, v := range m {
 						if v.CreatedAt.Before(time.Now().Add(-ma.config.CacheTTL)) {
@@ -92,7 +96,7 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 						}
 					}
 				}
-				ma.lock.Unlock()
+				ma.mu.Unlock()
 			case <-ctx.Done():
 				return
 			}
@@ -138,41 +142,10 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	rewriteOpts := m.getRewriteOptions(req)
 
 	switch req.Method {
-	case http.MethodGet:
-		m.lock.Lock()
-		defer m.lock.Unlock()
-
-		var prepared bool
-
-		c, ok := m.manifests[repo]
-		if !ok {
-			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-			if err != nil {
-				return err
-			}
-			prepared = true
-			// re-find
-			c = m.manifests[repo]
-		}
-
-		ma, ok := c[target]
-		if !ok {
-			if !prepared {
-				err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-				if err != nil {
-					return err
-				}
-			}
-
-			ma, ok = c[target]
-			if !ok {
-				// we failed
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "MANIFEST_UNKNOWN",
-					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
-				}
-			}
+	case http.MethodGet, http.MethodHead:
+		ma, err := m.manifest(req.Context(), repo, target, rewriteOpts)
+		if err != nil {
+			return err
 		}
 		rd := sha256.Sum256(ma.Blob)
 		d := "sha256:" + hex.EncodeToString(rd[:])
@@ -180,43 +153,12 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 		resp.Header().Set("Content-Type", ma.ContentType)
 		resp.Header().Set("Content-Length", fmt.Sprint(len(ma.Blob)))
 		resp.WriteHeader(http.StatusOK)
-		_, err := io.Copy(resp, bytes.NewReader(ma.Blob))
-		if err != nil {
+		if req.Method == http.MethodHead {
+			return nil
+		}
+		if _, err := io.Copy(resp, bytes.NewReader(ma.Blob)); err != nil {
 			return errors.RegErrInternal(err)
 		}
-		return nil
-
-	case http.MethodHead:
-		m.lock.Lock()
-		defer m.lock.Unlock()
-		if _, ok := m.manifests[repo]; !ok {
-
-			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-			if err != nil {
-				return err
-			}
-		}
-		ma, ok := m.manifests[repo][target]
-		if !ok {
-			err := m.prepareChart(req.Context(), repo, target, rewriteOpts)
-			if err != nil {
-				return err
-			}
-			ma, ok = m.manifests[repo][target]
-			if !ok {
-				return &errors.RegError{
-					Status:  http.StatusNotFound,
-					Code:    "MANIFEST_UNKNOWN",
-					Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
-				}
-			}
-		}
-		rd := sha256.Sum256(ma.Blob)
-		d := "sha256:" + hex.EncodeToString(rd[:])
-		resp.Header().Set("Docker-Content-Digest", d)
-		resp.Header().Set("Content-Type", ma.ContentType)
-		resp.Header().Set("Content-Length", fmt.Sprint(len(ma.Blob)))
-		resp.WriteHeader(http.StatusOK)
 		return nil
 
 	default:
@@ -266,9 +208,6 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 			Message: "We don't understand your method + url",
 		}
 	}
-	m.lock.Lock()
-	defer m.lock.Unlock()
-
 	// Determine rewrite options from config and query params
 	rewriteOpts := m.getRewriteOptions(req)
 
@@ -296,14 +235,14 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	}
 
 	if !fromIndex {
-		c, ok := m.manifests[fullRepo]
-		if !ok {
-			if err := m.prepareChart(req.Context(), fullRepo, "", rewriteOpts); err != nil {
+		names := m.names(fullRepo)
+		if names == nil {
+			if err := m.prepare(req.Context(), fullRepo, "", rewriteOpts); err != nil {
 				return err
 			}
-			c = m.manifests[fullRepo]
+			names = m.names(fullRepo)
 		}
-		for tag := range c {
+		for _, tag := range names {
 			if !strings.Contains(tag, "sha256:") {
 				tags = append(tags, helper.VersionToTag(tag))
 			}
@@ -351,6 +290,8 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 }
 
 func (m *Manifests) Read(repo string, name string) (Manifest, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	mRepo, ok := m.manifests[repo]
 	if !ok {
@@ -364,6 +305,8 @@ func (m *Manifests) Read(repo string, name string) (Manifest, error) {
 }
 
 func (m *Manifests) Write(repo string, name string, n Manifest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	mRepo, ok := m.manifests[repo]
 	if !ok {
@@ -416,8 +359,8 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) e
 		}
 
 	} else {
-		m.lock.Lock()
-		defer m.lock.Unlock()
+		m.mu.RLock()
+		defer m.mu.RUnlock()
 
 		// TODO: implement pagination
 		for key := range m.manifests {

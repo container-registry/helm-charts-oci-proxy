@@ -191,7 +191,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	downloadUrl := u.String()
 
-	manifestData, err := m.download(downloadUrl)
+	manifestData, err := m.download(ctx, downloadUrl)
 	if err != nil {
 		return downloadError(err, "MANIFEST_UNKNOWN")
 	}
@@ -324,17 +324,20 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 	c, ok := m.cache.Get(repoURLPath)
 
 	if !ok || c == nil {
-		// nothing in the cache
-		res := &cacheResp{}
-		var size int
-		res.c, size, res.err = m.downloadIndex(repoURLPath)
-
-		var ttl = m.config.IndexCacheTTL
-		if res.err != nil {
-			// cache error too to avoid external resource exhausting
-			ttl = m.config.IndexErrorCacheTTl
-		}
-		m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+		// Concurrent misses for one repository share a single download and parse.
+		v, _, _ := m.indexes.Do(repoURLPath, func() (interface{}, error) {
+			res := &cacheResp{}
+			var size int
+			res.c, size, res.err = m.downloadIndex(repoURLPath)
+			ttl := m.config.IndexCacheTTL
+			if res.err != nil {
+				// cache error too to avoid external resource exhausting
+				ttl = m.config.IndexErrorCacheTTl
+			}
+			m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+			return res, nil
+		})
+		res := v.(*cacheResp)
 		return res.c, res.err
 	}
 
@@ -360,7 +363,7 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, int, err
 		m.log.Printf("download index: %s\n", url)
 	}
 	indexDownloads.Add(1)
-	data, err := m.download(url)
+	data, err := m.download(context.Background(), url)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -448,7 +451,7 @@ func ParseIndex(data []byte) (*repo.IndexFile, error) {
 	return i, nil
 }
 
-func (m *Manifests) download(rawURL string) ([]byte, error) {
+func (m *Manifests) download(ctx context.Context, rawURL string) ([]byte, error) {
 	if m.config.Debug {
 		m.log.Printf("downloading : %s\n", rawURL)
 	}
@@ -461,7 +464,11 @@ func (m *Manifests) download(rawURL string) ([]byte, error) {
 	if parsed.Scheme != "https" {
 		return nil, &policyError{fmt.Sprintf("refusing non-https download URL %q", rawURL)}
 	}
-	resp, err := m.httpClient.Get(rawURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
