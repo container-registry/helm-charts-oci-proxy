@@ -16,8 +16,6 @@ import (
 // version waits for it and the result is cached for all of them.
 const prepareTimeout = 2 * time.Minute
 
-const defaultPrepareConcurrency = 4
-
 func (m *Manifests) manifest(ctx context.Context, repo, target string) (Manifest, *errors.RegError) {
 	if ma, err := m.Read(repo, target); err == nil {
 		return ma, nil

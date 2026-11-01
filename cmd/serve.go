@@ -44,52 +44,23 @@ func newCmdRegistry() *cobra.Command {
 func newCmdServe() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
-		Short: "Serve an in-memory registry implementation",
-		Long: `This sub-command serves an in-memory registry implementation on port :8080 (or $PORT)
+		Short: "Serve Helm chart repositories as a read-only OCI registry",
+		Long: `This sub-command serves Helm chart repositories as a read-only OCI registry on port :9000 (or $PORT).
 
-The command blocks while the server accepts pushes and pulls.
-
-Contents are only stored in memory, and when the process exits, pushed data is lost.`,
+The command blocks while the server answers pulls. Charts are converted on demand from their upstream
+chart repositories and kept only in memory, so nothing survives a restart.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
 			l := log.New(os.Stdout, "proxy-", log.LstdFlags)
 
-			port, err := env.GetInt("PORT", 9000)
+			cfg, err := loadServeConfig()
 			if err != nil {
 				l.Fatalln(err)
 			}
 
-			debug, _ := env.GetBool("DEBUG", false)
-			cacheTTL, _ := env.GetInt("MANIFEST_CACHE_TTL", 60)       // 1 minute
-			indexCacheTTL, _ := env.GetInt("INDEX_CACHE_TTL", 3600*4) // 4 hours
-			indexCacheMiB, err := env.GetInt("INDEX_CACHE_SIZE_MIB", 128)
-			if err != nil {
-				l.Fatalln(fmt.Errorf("INDEX_CACHE_SIZE_MIB: %w", err))
-			}
-			indexErrorCacheTTL, _ := env.GetInt("INDEX_ERROR_CACHE_TTL", 30) // 30 seconds
-			prepareConcurrency, err := env.GetInt("PREPARE_CONCURRENCY", 4)
-			if err != nil || prepareConcurrency < 1 {
-				l.Fatalln(fmt.Errorf("PREPARE_CONCURRENCY must be a positive integer: %v", err))
-			}
-
-			rewriteDeps, _ := env.GetBool("REWRITE_DEPENDENCIES", false)
-			proxyHost := env.GetString("PROXY_HOST", "")
-			if err := validateRewrite(rewriteDeps, proxyHost); err != nil {
-				l.Fatalln(err)
-			}
-			allowPrivateNetworks, _ := env.GetBool("ALLOW_PRIVATE_NETWORKS", false)
-
-			useTLS, _ := env.GetBool("USE_TLS", false)
-			certFile := env.GetString("CERT_FILE", "certs/registry.pem")
-			keyfileFile := env.GetString("KEY_FILE", "certs/registry-key.pem")
-			shutdownTimeout, err := env.GetInt("SHUTDOWN_TIMEOUT", 25)
-			if err != nil || shutdownTimeout < 1 {
-				l.Fatalln(fmt.Errorf("SHUTDOWN_TIMEOUT must be a positive number of seconds: %v", err))
-			}
-
-			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+			listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", cfg.port))
 			if err != nil {
 				l.Fatalln(err)
 			}
@@ -97,19 +68,18 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			portI := listener.Addr().(*net.TCPAddr).Port
 
 			// DIAG_ADDR serves pprof and expvar on a separate listener; keep it off the public port.
-			diagAddr := env.GetString("DIAG_ADDR", "")
-			indexCache, err := newIndexCache(indexCacheMiB, diagAddr != "")
+			indexCache, err := newIndexCache(cfg.indexCacheMiB, cfg.diagAddr != "")
 			if err != nil {
 				l.Fatalln(err)
 			}
 
-			if diagAddr != "" {
+			if cfg.diagAddr != "" {
 				publishCacheMetrics("index_cache", indexCache)
-				diagListener, err := net.Listen("tcp", diagAddr)
+				diagListener, err := net.Listen("tcp", cfg.diagAddr)
 				if err != nil {
 					l.Fatalln(err)
 				}
-				diag := newDiagServer(diagAddr)
+				diag := newDiagServer(cfg.diagAddr)
 				go func() {
 					l.Printf("diagnostics listening on %s", diagListener.Addr())
 					if err := diag.Serve(diagListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -122,19 +92,18 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 			blobsHandler := mem.NewMemHandler()
 
 			manifests := manifest.NewManifests(ctx, blobsHandler, manifest.Config{
-				Debug:                debug,
-				CacheTTL:             time.Duration(cacheTTL) * time.Second,
-				IndexCacheTTL:        time.Duration(indexCacheTTL) * time.Second,
-				IndexCacheMaxCost:    int64(indexCacheMiB) << 20,
-				IndexErrorCacheTTl:   time.Duration(indexErrorCacheTTL) * time.Second,
-				PrepareConcurrency:   prepareConcurrency,
-				RewriteDependencies:  rewriteDeps,
-				ProxyHost:            proxyHost,
-				AllowPrivateNetworks: allowPrivateNetworks,
+				Debug:                cfg.debug,
+				CacheTTL:             cfg.manifestCacheTTL,
+				IndexCacheTTL:        cfg.indexCacheTTL,
+				IndexCacheMaxCost:    int64(cfg.indexCacheMiB) << 20,
+				IndexErrorCacheTTL:   cfg.indexErrorCacheTTL,
+				PrepareConcurrency:   cfg.prepareConcurrency,
+				RewriteDependencies:  cfg.rewriteDeps,
+				ProxyHost:            cfg.proxyHost,
+				AllowPrivateNetworks: cfg.allowPrivateNetworks,
 			}, indexCache, l)
 
 			blobsHttpHandler := blobs.NewBlobs(manifests.Blobs(), l)
-			//blobsHandler = file.NewHandler(dbLocation)
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
 				Handler: registry.New(
@@ -142,17 +111,17 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 					blobsHttpHandler.Handle,
 					manifests.HandleTags,
 					manifests.HandleCatalog,
-					registry.Debug(debug), registry.Logger(l)),
+					registry.Debug(cfg.debug), registry.Logger(l)),
 			}
 
 			return runServer(ctx, s, func() error {
-				if useTLS {
+				if cfg.useTLS {
 					l.Printf("listening HTTP over TLS serving on port %d", portI)
-					return s.ServeTLS(listener, certFile, keyfileFile)
+					return s.ServeTLS(listener, cfg.certFile, cfg.keyFile)
 				}
 				l.Printf("listening HTTP on port %d", portI)
 				return s.Serve(listener)
-			}, time.Duration(shutdownTimeout)*time.Second, l)
+			}, cfg.shutdownTimeout, l)
 		},
 	}
 }
@@ -182,6 +151,79 @@ func runServer(ctx context.Context, s *http.Server, serve func() error, timeout 
 }
 
 const maxIndexCacheMiB = 1 << 20
+
+type serveConfig struct {
+	port                 int
+	debug                bool
+	manifestCacheTTL     time.Duration
+	indexCacheTTL        time.Duration
+	indexCacheMiB        int
+	indexErrorCacheTTL   time.Duration
+	prepareConcurrency   int
+	rewriteDeps          bool
+	proxyHost            string
+	allowPrivateNetworks bool
+	useTLS               bool
+	certFile             string
+	keyFile              string
+	shutdownTimeout      time.Duration
+	diagAddr             string
+}
+
+// loadServeConfig reads the environment and reports every invalid value, so a
+// typo fails the start instead of silently selecting a default.
+func loadServeConfig() (serveConfig, error) {
+	var r envReader
+	c := serveConfig{
+		port:                 r.int("PORT", 9000, 0),
+		debug:                r.bool("DEBUG", false),
+		manifestCacheTTL:     r.seconds("MANIFEST_CACHE_TTL", 60, 0),
+		indexCacheTTL:        r.seconds("INDEX_CACHE_TTL", 4*3600, 0),
+		indexCacheMiB:        r.int("INDEX_CACHE_SIZE_MIB", 128, 1),
+		indexErrorCacheTTL:   r.seconds("INDEX_ERROR_CACHE_TTL", 30, 0),
+		prepareConcurrency:   r.int("PREPARE_CONCURRENCY", manifest.DefaultPrepareConcurrency, 1),
+		rewriteDeps:          r.bool("REWRITE_DEPENDENCIES", false),
+		proxyHost:            env.GetString("PROXY_HOST", ""),
+		allowPrivateNetworks: r.bool("ALLOW_PRIVATE_NETWORKS", false),
+		useTLS:               r.bool("USE_TLS", false),
+		certFile:             env.GetString("CERT_FILE", "certs/registry.pem"),
+		keyFile:              env.GetString("KEY_FILE", "certs/registry-key.pem"),
+		shutdownTimeout:      r.seconds("SHUTDOWN_TIMEOUT", 25, 1),
+		diagAddr:             env.GetString("DIAG_ADDR", ""),
+	}
+	r.add(validateRewrite(c.rewriteDeps, c.proxyHost))
+	return c, errors.Join(r.errs...)
+}
+
+type envReader struct{ errs []error }
+
+func (r *envReader) add(err error) {
+	if err != nil {
+		r.errs = append(r.errs, err)
+	}
+}
+
+func (r *envReader) int(key string, def, minimum int) int {
+	v, err := env.GetInt(key, def)
+	if err != nil {
+		r.add(fmt.Errorf("%s: %w", key, err))
+	} else if v < minimum {
+		r.add(fmt.Errorf("%s must be at least %d, got %d", key, minimum, v))
+	}
+	return v
+}
+
+func (r *envReader) seconds(key string, def, minimum int) time.Duration {
+	return time.Duration(r.int(key, def, minimum)) * time.Second
+}
+
+func (r *envReader) bool(key string, def bool) bool {
+	v, err := env.GetBool(key, def)
+	if err != nil {
+		r.add(fmt.Errorf("%s: %w", key, err))
+	}
+	return v
+}
 
 // validateRewrite requires PROXY_HOST because rewritten charts are shared by
 // all clients; the host must not come from a request.

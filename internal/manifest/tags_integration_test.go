@@ -42,7 +42,7 @@ func TestHandleTags_PrereleaseOnlyChart_Integration(t *testing.T) {
 	m := NewManifests(context.Background(), mem.NewMemHandler(), Config{
 		CacheTTL:           time.Minute,
 		IndexCacheTTL:      time.Minute,
-		IndexErrorCacheTTl: time.Second,
+		IndexErrorCacheTTL: time.Second,
 	}, &mapCache{m: map[interface{}]interface{}{}}, log.New(os.Stdout, "test-", log.LstdFlags))
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/helm.linkerd.io/edge/linkerd-failover/tags/list", nil)

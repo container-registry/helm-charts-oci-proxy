@@ -2,12 +2,15 @@ package manifest
 
 import "time"
 
+// DefaultPrepareConcurrency is used when Config.PrepareConcurrency is zero.
+const DefaultPrepareConcurrency = 4
+
 type Config struct {
 	Debug              bool
 	CacheTTL           time.Duration // for how long store manifest
 	IndexCacheTTL      time.Duration
 	IndexCacheMaxCost  int64 // ristretto MaxCost of the index cache
-	IndexErrorCacheTTl time.Duration
+	IndexErrorCacheTTL time.Duration
 	// PrepareConcurrency bounds chart preparations running at once. Zero means
 	// the default.
 	PrepareConcurrency int

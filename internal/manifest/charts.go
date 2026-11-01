@@ -254,7 +254,7 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 			ttl := m.config.IndexCacheTTL
 			if res.err != nil {
 				// cache error too to avoid external resource exhausting
-				ttl = m.config.IndexErrorCacheTTl
+				ttl = m.config.IndexErrorCacheTTL
 			}
 			m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
 			// ristretto applies writes asynchronously; without waiting, a request

@@ -64,7 +64,7 @@ type Manifests struct {
 func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
 	concurrency := config.PrepareConcurrency
 	if concurrency <= 0 {
-		concurrency = defaultPrepareConcurrency
+		concurrency = DefaultPrepareConcurrency
 	}
 	ma := &Manifests{
 		manifests:   map[string]map[string]Manifest{},
@@ -74,7 +74,7 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		cache:       cache,
 		httpClient:  newDownloadClient(config.AllowPrivateNetworks),
 		slots:       make(chan struct{}, concurrency),
-		failures:    newFailureCache(config.IndexErrorCacheTTl),
+		failures:    newFailureCache(config.IndexErrorCacheTTL),
 	}
 	ma.layerClient = newLayerClient(ma.httpClient)
 	ma.blobs = newStreamBlobs(blobHandler, ma.openLayer)
