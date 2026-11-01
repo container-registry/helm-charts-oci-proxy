@@ -27,8 +27,10 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -254,6 +256,15 @@ func (r *envReader) bool(key string, def bool) bool {
 func validateRewrite(rewriteDeps bool, proxyHost string) error {
 	if rewriteDeps && proxyHost == "" {
 		return errors.New("REWRITE_DEPENDENCIES=true requires PROXY_HOST")
+	}
+	if proxyHost == "" {
+		return nil
+	}
+	// The value is pasted into oci://<PROXY_HOST>/..., so anything beyond
+	// host[:port] produces a broken dependency URL.
+	u, err := url.Parse("oci://" + proxyHost)
+	if strings.ContainsAny(proxyHost, "/\\?#@ \t\r\n") || err != nil || u.Host != proxyHost || u.Hostname() == "" {
+		return fmt.Errorf("PROXY_HOST must be a bare host[:port] such as chartproxy.example.com, got %q", proxyHost)
 	}
 	return nil
 }

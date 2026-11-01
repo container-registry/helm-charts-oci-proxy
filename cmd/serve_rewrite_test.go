@@ -15,3 +15,20 @@ func TestRewriteRequiresProxyHost(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyHostMustBeBareHost(t *testing.T) {
+	for _, h := range []string{"proxy.example.com", "proxy.example.com:8443", "10.0.0.1:9000", "[::1]:9000"} {
+		if err := validateRewrite(true, h); err != nil {
+			t.Errorf("PROXY_HOST=%q rejected: %v", h, err)
+		}
+	}
+	for _, h := range []string{
+		"https://proxy.example.com", "proxy.example.com/", "proxy.example.com/charts", " proxy.example.com",
+		"proxy.example.com ", "proxy.example.com\n", "user@proxy.example.com", "proxy.example.com?x=1",
+		"proxy.example.com:port", ":9000", "proxy.example.com#x",
+	} {
+		if err := validateRewrite(true, h); err == nil {
+			t.Errorf("PROXY_HOST=%q accepted", h)
+		}
+	}
+}

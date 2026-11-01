@@ -191,7 +191,7 @@ A variable that is set but empty is treated as unset. An invalid value stops the
 * `KEY_FILE` - TLS private key path when `USE_TLS` is set, default `certs/registry-key.pem`
 * `SHUTDOWN_TIMEOUT` - seconds to let in-flight requests finish after SIGTERM or SIGINT before the server closes them. Keep it below the pod's `terminationGracePeriodSeconds` (Kubernetes default 30). Default `25`.
 * `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Applies to every request. Requires `PROXY_HOST`; the proxy refuses to start without it. Default is `false`.
-* `PROXY_HOST` - the proxy host used in rewritten dependency URLs, e.g. `chartproxy.example.com`. Required when `REWRITE_DEPENDENCIES` is `true`.
+* `PROXY_HOST` - the proxy host used in rewritten dependency URLs, as a bare `host[:port]` such as `chartproxy.example.com`, without scheme, path or trailing slash. Required when `REWRITE_DEPENDENCIES` is `true`.
 * `ALLOW_PRIVATE_NETWORKS` - allow upstream downloads from private, loopback, and link-local addresses. Off by default as an SSRF guard; enable only when proxying chart repositories on an internal network. Default is `false`.
 * `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, in-memory blob store size). Unset by default, which disables the listener. Never expose it through the public ingress.
 
