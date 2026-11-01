@@ -159,7 +159,8 @@ type vars struct {
 // fetch per row add latency, so rows are often further apart, and the cgroup
 // and heap readings of one row are taken a few milliseconds apart. Heap and
 // goroutine profiles are saved each time the in-use heap passes the last saved
-// value by 50MiB, so heap-peak.pb.gz can be up to 50MiB below the true peak.
+// value by 50MiB. Allocations between samples are not seen, so heap-peak.pb.gz
+// can be well below the true peak; treat it as a lower bound.
 func sample(diag, target, out string, inflight *atomic.Int64, stop <-chan struct{}) {
 	f, err := os.Create(filepath.Join(out, "mem.csv"))
 	if err != nil {

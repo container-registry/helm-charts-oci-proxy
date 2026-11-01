@@ -150,7 +150,7 @@ func fetch(args []string) {
 	st.save()
 	log.Printf("%d index hosts, %d distinct chart URLs", len(wanted), len(charts))
 	if unroutable > 0 {
-		log.Printf("warning: %d chart URLs use an IP literal or a port other than 443; network aliases on :443 cannot intercept them, so a replay reaches the real host", unroutable)
+		log.Printf("warning: %d resolved chart references use an IP literal or a port other than 443; the mirror serves hostnames on :443 only, so during replay the proxy fails to connect or reaches the real host for them", unroutable)
 	}
 	if *dry {
 		return

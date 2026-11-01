@@ -125,20 +125,17 @@ func IndexReference(target string) string {
 	return "v" + target
 }
 
-// ChartURL resolves the download URL of a chart version; relative URLs are
-// relative to the index location.
+// ChartURL resolves the download URL of a chart version the way helm's
+// repo.ResolveReferenceURL does, so root- and parent-relative entries work.
 func ChartURL(indexPath string, cv *repo.ChartVersion) (*url.URL, error) {
 	if len(cv.URLs) == 0 {
 		return nil, fmt.Errorf("chart %s version %s has no URLs", cv.Name, cv.Version)
 	}
-	u, err := url.Parse(cv.URLs[0])
+	resolved, err := repo.ResolveReferenceURL("https://"+indexPath, cv.URLs[0])
 	if err != nil {
 		return nil, err
 	}
-	if u.IsAbs() {
-		return u, nil
-	}
-	return url.Parse(fmt.Sprintf("https://%s/%s", indexPath, cv.URLs[0]))
+	return url.Parse(resolved)
 }
 
 func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string, rewriteOpts RewriteOptions) *errors.RegError {
