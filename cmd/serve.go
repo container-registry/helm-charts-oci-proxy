@@ -268,10 +268,21 @@ func validateRewrite(rewriteDeps bool, proxyHost string) error {
 	// The value is pasted into oci://<PROXY_HOST>/..., so anything beyond
 	// host[:port] produces a broken dependency URL.
 	u, err := url.Parse("oci://" + proxyHost)
-	if strings.ContainsAny(proxyHost, "/\\?#@ \t\r\n") || err != nil || u.Host != proxyHost || u.Hostname() == "" {
+	if strings.ContainsAny(proxyHost, "/\\?#@ \t\r\n") || err != nil || u.Host != proxyHost || u.Hostname() == "" ||
+		strings.HasSuffix(proxyHost, ":") || !validPort(u.Port()) {
 		return fmt.Errorf("PROXY_HOST must be a bare host[:port] such as chartproxy.example.com, got %q", proxyHost)
 	}
 	return nil
+}
+
+// validPort reports whether p is empty or within 1..65535; url.Parse checks
+// neither the range nor that a port follows the colon.
+func validPort(p string) bool {
+	if p == "" {
+		return true
+	}
+	n, err := strconv.Atoi(p)
+	return err == nil && n >= 1 && n <= 65535
 }
 
 // newIndexCache holds one parsed index per chart repository. NumCounters is 10x
