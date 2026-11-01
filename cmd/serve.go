@@ -80,22 +80,41 @@ Contents are only stored in memory, and when the process exits, pushed data is l
 
 			portI := listener.Addr().(*net.TCPAddr).Port
 
+			// DIAG_ADDR serves pprof and expvar on a separate listener; keep it off the public port.
+			diagAddr := env.GetString("DIAG_ADDR", "")
 			indexCache, err := ristretto.NewCache(&ristretto.Config{
 				NumCounters: 1e7,       // number of keys to track frequency of (10M).
 				MaxCost:     100000000, // maximum cost of cache (1GB).
 				BufferItems: 64,        // number of keys per Get buffer.
+				Metrics:     diagAddr != "",
 			})
 			if err != nil {
 				l.Fatalln(err)
 			}
 
+			if diagAddr != "" {
+				publishCacheMetrics("index_cache", indexCache)
+				diagListener, err := net.Listen("tcp", diagAddr)
+				if err != nil {
+					l.Fatalln(err)
+				}
+				diag := newDiagServer(diagAddr)
+				go func() {
+					l.Printf("diagnostics listening on %s", diagListener.Addr())
+					if err := diag.Serve(diagListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						l.Printf("diagnostics server: %v", err)
+					}
+				}()
+				defer diag.Close()
+			}
+
 			blobsHandler := mem.NewMemHandler()
 
 			manifests := manifest.NewManifests(ctx, blobsHandler, manifest.Config{
-				Debug:               debug,
-				CacheTTL:            time.Duration(cacheTTL) * time.Second,
-				IndexCacheTTL:       time.Duration(indexCacheTTL) * time.Second,
-				IndexErrorCacheTTl:  time.Duration(indexErrorCacheTTL) * time.Second,
+				Debug:                debug,
+				CacheTTL:             time.Duration(cacheTTL) * time.Second,
+				IndexCacheTTL:        time.Duration(indexCacheTTL) * time.Second,
+				IndexErrorCacheTTl:   time.Duration(indexErrorCacheTTL) * time.Second,
 				RewriteDependencies:  rewriteDeps,
 				ProxyHost:            proxyHost,
 				AllowPrivateNetworks: allowPrivateNetworks,

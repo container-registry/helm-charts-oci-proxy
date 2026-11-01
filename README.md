@@ -188,6 +188,7 @@ There are not many options in configure the application except the following.
 * `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Default is `false`.
 * `PROXY_HOST` - override the proxy host used in rewritten dependency URLs. If not set, uses the Host header from incoming requests.
 * `ALLOW_PRIVATE_NETWORKS` - allow upstream downloads from private, loopback, and link-local addresses. Off by default as an SSRF guard; enable only when proxying chart repositories on an internal network. Default is `false`.
+* `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, in-memory blob store size). Unset by default, which disables the listener. Never expose it through the public ingress.
 
 ### Dependency URL Rewriting
 

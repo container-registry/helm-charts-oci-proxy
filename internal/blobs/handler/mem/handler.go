@@ -3,10 +3,16 @@ package mem
 import (
 	"bytes"
 	"context"
+	"expvar"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"io"
 	"sync"
+)
+
+var (
+	storedBytes = expvar.NewInt("blob_store_bytes")
+	storedBlobs = expvar.NewInt("blob_store_blobs")
 )
 
 type Handler struct {
@@ -49,7 +55,13 @@ func (m *Handler) Put(_ context.Context, _ string, h v1.Hash, rc io.ReadCloser) 
 	if err != nil {
 		return err
 	}
+	if prev, ok := m.m[h.String()]; ok {
+		storedBytes.Add(-int64(len(prev)))
+		storedBlobs.Add(-1)
+	}
 	m.m[h.String()] = all
+	storedBytes.Add(int64(len(all)))
+	storedBlobs.Add(1)
 	return nil
 }
 func (m *Handler) Delete(_ context.Context, _ string, h v1.Hash) error {
@@ -60,6 +72,8 @@ func (m *Handler) Delete(_ context.Context, _ string, h v1.Hash) error {
 		return blobs.ErrNotFound
 	}
 
+	storedBytes.Add(-int64(len(m.m[h.String()])))
+	storedBlobs.Add(-1)
 	delete(m.m, h.String())
 	return nil
 }

@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	stderrors "errors"
+	"expvar"
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
@@ -106,6 +109,35 @@ func getDeterministicCreatedTimestamp(chartVer *repo.ChartVersion) time.Time {
 	return baseTime.Add(time.Duration(offset) * time.Second)
 }
 
+// ManifestTarget turns a requested manifest tag into the version key the
+// proxy caches manifests under: a leading "v" is dropped and Helm's "_" form of
+// build metadata becomes "+".
+func ManifestTarget(tag string) string {
+	return helper.TagToVersion(strings.TrimPrefix(tag, "v"))
+}
+
+// IndexReference is the reference prepareChart looks up in the index for a
+// manifest target.
+func IndexReference(target string) string {
+	if target == "" || strings.HasPrefix(target, "v") {
+		return target
+	}
+	return "v" + target
+}
+
+// ChartURL resolves the download URL of a chart version the way helm's
+// repo.ResolveReferenceURL does, so root- and parent-relative entries work.
+func ChartURL(indexPath string, cv *repo.ChartVersion) (*url.URL, error) {
+	if len(cv.URLs) == 0 {
+		return nil, fmt.Errorf("chart %s version %s has no URLs", cv.Name, cv.Version)
+	}
+	resolved, err := repo.ResolveReferenceURL("https://"+indexPath, cv.URLs[0])
+	if err != nil {
+		return nil, err
+	}
+	return url.Parse(resolved)
+}
+
 func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string, rewriteOpts RewriteOptions) *errors.RegError {
 	elem := strings.Split(repo, "/")
 
@@ -125,9 +157,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		}
 	}
 
-	if reference != "" && !strings.HasPrefix(reference, "v") {
-		reference = fmt.Sprintf("v%s", reference)
-	}
+	reference = IndexReference(reference)
 
 	m.log.Printf("searching index for %s with reference %s\n", chart, reference)
 	chartVer, err := index.Get(chart, reference)
@@ -148,18 +178,13 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	reference = strings.TrimPrefix(chartVer.Version, "v")
 
-	var downloadUrl string
-
-	u, err := url.Parse(chartVer.URLs[0])
+	u, err := ChartURL(path, chartVer)
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
-	if u.IsAbs() {
-		downloadUrl = u.String()
-	} else {
-		downloadUrl = fmt.Sprintf("https://%s/%s", path, chartVer.URLs[0])
-	}
+	downloadUrl := u.String()
 
+	chartPrepareAttempts.Add(1)
 	manifestData, err := m.download(downloadUrl)
 	if err != nil {
 		return errors.RegErrInternal(err)
@@ -269,6 +294,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	if err != nil {
 		return errors.RegErrInternal(err)
 	}
+	chartsPrepared.Add(1)
 	return nil
 }
 
@@ -304,6 +330,14 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 	return res.c, res.err
 }
 
+var (
+	indexParses          = expvar.NewInt("index_parses")
+	indexParseMs         = expvar.NewInt("index_parse_ms")
+	indexDownloads       = expvar.NewInt("index_downloads")
+	chartsPrepared       = expvar.NewInt("charts_prepared")
+	chartPrepareAttempts = expvar.NewInt("chart_prepare_attempts")
+)
+
 func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 	url := fmt.Sprintf("https://%s/index.yaml", repoURLPath)
 	if m.config.Debug {
@@ -313,27 +347,55 @@ func (m *Manifests) downloadIndex(repoURLPath string) (*repo.IndexFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseIndex(data)
+}
+
+// ParseIndex decodes and normalises a chart repository index the way the proxy
+// resolves chart versions from it.
+// ignoreSkippableChartValidationError is unexported in helm's repo package;
+// this copy keeps the same exception (helm/helm#12748: JFrog strips aliases).
+func ignoreSkippableChartValidationError(err error) error {
+	var verr chart.ValidationError
+	if !stderrors.As(err, &verr) {
+		return err
+	}
+	if strings.HasPrefix(verr.Error(), "validation: more than one dependency with name or alias") {
+		return nil
+	}
+	return err
+}
+
+func ParseIndex(data []byte) (*repo.IndexFile, error) {
+	indexParses.Add(1)
+	defer func(t time.Time) { indexParseMs.Add(time.Since(t).Milliseconds()) }(time.Now())
 	i := repo.NewIndexFile()
 
 	if len(data) == 0 {
 		return i, repo.ErrEmptyIndexYaml
 	}
-	if err = yaml.UnmarshalStrict(data, i); err != nil {
+	if err := yaml.UnmarshalStrict(data, i); err != nil {
 		return nil, err
 	}
 
-	for _, cvs := range i.Entries {
+	// Mirrors helm's repo.loadIndex, so the proxy offers the same versions as
+	// `helm repo add` would.
+	for name, cvs := range i.Entries {
 		for idx := len(cvs) - 1; idx >= 0; idx-- {
 			if cvs[idx] == nil {
+				cvs = append(cvs[:idx], cvs[idx+1:]...)
 				continue
+			}
+			if cvs[idx].Metadata == nil {
+				cvs[idx].Metadata = &chart.Metadata{}
 			}
 			if cvs[idx].APIVersion == "" {
 				cvs[idx].APIVersion = chart.APIVersionV1
 			}
-			if err := cvs[idx].Validate(); err != nil {
+			if err := cvs[idx].Validate(); ignoreSkippableChartValidationError(err) != nil {
 				cvs = append(cvs[:idx], cvs[idx+1:]...)
 			}
 		}
+		i.Entries[name] = cvs
 	}
 	i.SortEntries()
 	if i.APIVersion == "" {
@@ -354,6 +416,7 @@ func (m *Manifests) getIndexBytes(url string) ([]byte, error) {
 	if !ok || c == nil {
 		// nothing in the cache
 		res := &cacheResp{}
+		indexDownloads.Add(1)
 		res.c, res.err = m.download(url)
 
 		var ttl = m.config.IndexCacheTTL
