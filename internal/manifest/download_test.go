@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	stderrors "errors"
@@ -62,6 +64,18 @@ func regStatus(t *testing.T, err error) int {
 // Before this change an upstream error page was read as the chart, packaged
 // and served with 200; clients cached an artifact that cannot be installed.
 func TestPrepareChart_UpstreamErrorIsNeverPackaged(t *testing.T) {
+	var gzHTML bytes.Buffer
+	zw := gzip.NewWriter(&gzHTML)
+	if _, err := zw.Write([]byte("<!DOCTYPE html><html>not a chart</html>")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tgz := chartTarball(t, "demo", "1.0.0")
+	// Keeps the gzip header, so only full archive parsing can reject it.
+	truncated := tgz[:len(tgz)/2]
+
 	for _, tc := range []struct {
 		name     string
 		upstream http.HandlerFunc
@@ -75,6 +89,17 @@ func TestPrepareChart_UpstreamErrorIsNeverPackaged(t *testing.T) {
 		{"500", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }, http.StatusBadGateway},
 		{"200 with HTML", func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprint(w, "<!DOCTYPE html><html>soft 404</html>")
+		}, http.StatusBadGateway},
+		{"200 with gzip-compressed HTML", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(gzHTML.Bytes())
+		}, http.StatusBadGateway},
+		{"200 with truncated archive", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(truncated)
+		}, http.StatusBadGateway},
+		// The declared length is never sent, so the client fails reading the body.
+		{"body cut short", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100000")
+			_, _ = w.Write(truncated)
 		}, http.StatusBadGateway},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

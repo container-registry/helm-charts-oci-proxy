@@ -217,10 +217,15 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 
 	// Extract chart metadata from the tarball to populate the OCI config layer
 	// This provides the Chart.yaml contents as required by the Helm OCI spec
+	// A gzip header alone does not make a chart: a truncated archive or
+	// gzip-compressed HTML passes isGzip but cannot be installed.
 	chartMeta, err := extractChartMeta(manifestData)
 	if err != nil {
-		m.log.Printf("warning: failed to extract chart metadata: %v, using empty config", err)
-		chartMeta = nil
+		return &errors.RegError{
+			Status:  http.StatusBadGateway,
+			Code:    "UPSTREAM_ERROR",
+			Message: fmt.Sprintf("upstream %s did not return a valid chart archive: %v", downloadUrl, err),
+		}
 	}
 
 	// Set deterministic timestamp for OCI manifest to ensure reproducible artifacts
@@ -494,7 +499,8 @@ func (e *upstreamStatusError) Error() string {
 func chartDownloadError(err error) *errors.RegError {
 	var se *upstreamStatusError
 	if !stderrors.As(err, &se) {
-		return errors.RegErrInternal(err)
+		// Dial, TLS, timeout and body-read failures are upstream failures too.
+		return &errors.RegError{Status: http.StatusBadGateway, Code: "UPSTREAM_ERROR", Message: err.Error()}
 	}
 	if se.status == http.StatusNotFound || se.status == http.StatusGone {
 		return &errors.RegError{Status: http.StatusNotFound, Code: "MANIFEST_UNKNOWN", Message: err.Error()}
