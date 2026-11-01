@@ -42,6 +42,7 @@ func main() {
 	perHost := flag.Int("per-host", 2, "charts checked at once per chart repository host")
 	allVersions := flag.Bool("all-versions", false, "check every version in the index, not only the latest")
 	helmBin := flag.String("helm", "helm", "helm 3 binary")
+	allowPrivate := flag.Bool("allow-private-upstream", false, "fetch upstreams on non-public addresses, as the proxy does with ALLOW_PRIVATE_NETWORKS=true")
 	only := flag.String("only", "", "regexp on <repository URL>/<chart>; check only matching charts")
 	label := flag.String("label", "", "name of the build under test, for the summary")
 	timeout := flag.Duration("timeout", 3*time.Minute, "timeout of each HTTP request and helm command")
@@ -83,7 +84,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer os.RemoveAll(work)
-	k := newChecker(pu, client, *helmBin, work, *timeout, *retryDelay)
+	k := newChecker(pu, client, guardUpstream(client, *allowPrivate), *helmBin, work, *timeout, *retryDelay)
 
 	jobs := buildJobs(k, disc.Packages, *allVersions, onlyRe)
 	log.Printf("%d charts to check, concurrency %d, %d per host", len(jobs), *conc, *perHost)

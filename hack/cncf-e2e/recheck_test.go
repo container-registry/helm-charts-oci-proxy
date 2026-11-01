@@ -57,8 +57,7 @@ func TestCheck_RecheckSeesRepublishedVersion(t *testing.T) {
 	defer proxy.Close()
 
 	pu, _ := url.Parse(proxy.URL)
-	k := newChecker(pu, up.Client(), "helm", t.TempDir(), 0, 0)
-	k.idx.c = up.Client()
+	k := newChecker(pu, up.Client(), guardUpstream(up.Client(), true), "helm", t.TempDir(), 0, 0)
 	p := Package{Name: "demo", Version: "1.0.0"}
 	p.Repository.URL = up.URL
 	r := k.check(job{pkg: p, version: p.Version})

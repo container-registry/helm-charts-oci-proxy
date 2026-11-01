@@ -69,6 +69,7 @@ type Result struct {
 type checker struct {
 	proxy      *url.URL
 	c          *http.Client
+	upstream   *http.Client
 	helm       string
 	helmEnv    []string
 	work       string
@@ -77,7 +78,7 @@ type checker struct {
 	idx        *indexCache
 }
 
-func newChecker(proxy *url.URL, c *http.Client, helm, work string, timeout, retryDelay time.Duration) *checker {
+func newChecker(proxy *url.URL, c, upstream *http.Client, helm, work string, timeout, retryDelay time.Duration) *checker {
 	// Isolated helm homes: no registry logins, repositories or caches of the user leak in.
 	env := append(os.Environ(),
 		"HELM_CACHE_HOME="+filepath.Join(work, "helm", "cache"),
@@ -85,8 +86,8 @@ func newChecker(proxy *url.URL, c *http.Client, helm, work string, timeout, retr
 		"HELM_DATA_HOME="+filepath.Join(work, "helm", "data"),
 	)
 	return &checker{
-		proxy: proxy, c: c, helm: helm, helmEnv: env, work: work, timeout: timeout, retryDelay: retryDelay,
-		idx: &indexCache{c: c, work: work, m: map[string]*indexEntry{}},
+		proxy: proxy, c: c, upstream: upstream, helm: helm, helmEnv: env, work: work, timeout: timeout, retryDelay: retryDelay,
+		idx: &indexCache{c: upstream, work: work, m: map[string]*indexEntry{}},
 	}
 }
 
@@ -173,6 +174,9 @@ func (k *checker) upstreamCheck(j job, freshIndex bool) (*upstream, string, stri
 		get = k.idx.load
 	}
 	idx, err := get(j.pkg.Repository.URL)
+	if isPolicyError(err) {
+		return nil, classNA, "index: the proxy refuses it by policy: " + err.Error()
+	}
 	if err != nil {
 		return nil, classUpstream, "index: " + err.Error()
 	}
@@ -195,7 +199,10 @@ func (k *checker) upstreamCheck(j job, freshIndex bool) (*upstream, string, stri
 	case !strings.HasPrefix(dl, "https://"):
 		return up, classNA, "download URL is not https; the proxy refuses it by policy"
 	}
-	data, _, err := getRetry(k.c, dl, maxBody)
+	data, _, err := getRetry(k.upstream, dl, maxBody)
+	if isPolicyError(err) {
+		return up, classNA, "tarball: the proxy refuses it by policy: " + err.Error()
+	}
 	if err != nil {
 		return up, classUpstream, "tarball: " + err.Error()
 	}
@@ -447,7 +454,7 @@ func getBytes(c *http.Client, u string, limit int64) ([]byte, error) {
 func getRetry(c *http.Client, u string, limit int64) ([]byte, int, error) {
 	data, err := getBytes(c, u, limit)
 	var se *statusError
-	if err != nil && !(errors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone)) {
+	if err != nil && !isPolicyError(err) && !(errors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone)) {
 		time.Sleep(5 * time.Second)
 		data, err = getBytes(c, u, limit)
 	}
