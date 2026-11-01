@@ -518,7 +518,13 @@ func digestOf(b []byte) string {
 
 func printable(b []byte) string {
 	if len(b) > 2048 {
-		b = b[:2048]
+		// Cut at a rune start so a multi-byte rune split by the limit does not
+		// make a text body look binary.
+		cut := 2048
+		for cut > 2048-utf8.UTFMax && !utf8.RuneStart(b[cut]) {
+			cut--
+		}
+		b = b[:cut]
 	}
 	if !utf8.Valid(b) {
 		return fmt.Sprintf("<%d bytes, not text>", len(b))

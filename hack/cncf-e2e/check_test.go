@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,5 +21,14 @@ func TestDefaultRetryDelay_OutlastsProxyErrorCache(t *testing.T) {
 	const proxyDefaultErrorTTL = 30 * time.Second // cmd/serve.go INDEX_ERROR_CACHE_TTL
 	if defaultRetryDelay <= proxyDefaultErrorTTL {
 		t.Errorf("defaultRetryDelay %s, want more than %s", defaultRetryDelay, proxyDefaultErrorTTL)
+	}
+}
+
+// A text body whose 2048-byte limit falls inside a multi-byte rune is still text.
+func TestPrintable_TruncatesAtRuneBoundary(t *testing.T) {
+	body := []byte(strings.Repeat("a", 2047) + strings.Repeat("ä", 10))
+	got := printable(body)
+	if strings.HasPrefix(got, "<") || len(got) != 2047 {
+		t.Errorf("printable returned %d bytes starting %q, want the 2047-byte text prefix", len(got), got[:min(len(got), 20)])
 	}
 }
