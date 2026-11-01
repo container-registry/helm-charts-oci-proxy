@@ -209,19 +209,17 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadUrl, err)
 	}
 
-	if proxyHost != "" {
-		rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, proxyHost, m.log)
-		if rewriteErr != nil {
-			m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
-		} else if result.Modified {
-			// The config must describe the archive that is served.
-			if meta, err := extractChartMeta(rewrittenData); err != nil {
-				m.log.Printf("warning: rewritten chart is unreadable, serving the original: %v", err)
-			} else {
-				manifestData, chartMeta = rewrittenData, meta
-				if m.config.Debug {
-					m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
-				}
+	rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, proxyHost, m.log)
+	if rewriteErr != nil {
+		m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
+	} else if result.Modified {
+		// The config must describe the archive that is served.
+		if meta, err := extractChartMeta(rewrittenData); err != nil {
+			m.log.Printf("warning: rewritten chart is unreadable, serving the original: %v", err)
+		} else {
+			manifestData, chartMeta = rewrittenData, meta
+			if m.config.Debug {
+				m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
 			}
 		}
 	}
