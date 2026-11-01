@@ -13,12 +13,13 @@ import (
 
 // A request that is running when shutdown starts must still complete.
 func TestShutdownDrainsInFlightRequest(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
+	started, release, shuttingDown := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	s := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		close(started)
 		<-release
 		_, _ = io.WriteString(w, "done")
 	})}
+	s.RegisterOnShutdown(func() { close(shuttingDown) })
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -46,8 +47,9 @@ func TestShutdownDrainsInFlightRequest(t *testing.T) {
 	}()
 	<-started
 	cancel()
-	// Give Shutdown time to start before the handler returns.
-	time.Sleep(200 * time.Millisecond)
+	// Shutdown runs its hooks after closing the listener, so the request is
+	// still in flight once Shutdown is under way.
+	<-shuttingDown
 	close(release)
 
 	if r := <-got; r.err != nil || r.body != "done" {
