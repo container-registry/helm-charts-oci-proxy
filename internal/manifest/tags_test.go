@@ -19,6 +19,11 @@ func (nopCache) SetWithTTL(_, _ interface{}, _ int64, _ time.Duration) bool { re
 
 func (nopCache) Get(_ interface{}) (interface{}, bool) { return nil, false }
 
+func newTestManifests(t *testing.T, cfg Config) *Manifests {
+	t.Helper()
+	return NewManifests(t.Context(), mem.NewMemHandler(), cfg, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+}
+
 // TestHandleTags_NoChartName guards against a panic: "/v2/tags/list" passes the
 // path length check but leaves no repository parts to slice.
 func TestHandleTags_NoChartName(t *testing.T) {
