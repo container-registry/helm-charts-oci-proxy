@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.2.1...v1.2.2) (2026-11-01)
+
+
+### Performance Improvements
+
+* **manifest:** stream chart conversion and prepare versions in parallel ([#107](https://github.com/container-registry/helm-charts-oci-proxy/issues/107)) ([501ec72](https://github.com/container-registry/helm-charts-oci-proxy/commit/501ec7248e095645017b9375bf3020ffe8358cea))
+
 ## [1.2.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.2.0...v1.2.1) (2026-11-01)
 
 
