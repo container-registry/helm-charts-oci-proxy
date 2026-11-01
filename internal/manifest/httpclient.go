@@ -9,17 +9,17 @@ import (
 	"time"
 )
 
+// policyError marks a download the proxy refused on purpose.
+type policyError struct{ msg string }
+
+func (e *policyError) Error() string { return e.msg }
+
 // newDownloadClient returns the HTTP client for upstream chart repository
 // requests. Unless allowPrivate is set, connections to non-public addresses are
 // refused so a crafted repo path or index.yaml cannot turn the proxy into an
 // SSRF gateway (cloud metadata endpoints, cluster-internal services). The check
 // runs at dial time, after DNS resolution, so it also covers redirects and DNS
 // rebinding.
-// policyError marks a download the proxy refused on purpose.
-type policyError struct{ msg string }
-
-func (e *policyError) Error() string { return e.msg }
-
 func newDownloadClient(allowPrivate bool) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
