@@ -50,6 +50,12 @@ func TestShutdownDrainsInFlightRequest(t *testing.T) {
 	// Shutdown runs its hooks after closing the listener, so the request is
 	// still in flight once Shutdown is under way.
 	<-shuttingDown
+	// runServer must wait for the drain; returning now would abandon the request.
+	select {
+	case err := <-runErr:
+		t.Fatalf("runServer returned while a request was in flight: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
 	close(release)
 
 	if r := <-got; r.err != nil || r.body != "done" {
