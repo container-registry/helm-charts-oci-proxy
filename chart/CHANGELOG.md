@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.5](https://github.com/container-registry/helm-charts-oci-proxy/compare/chart-v2.0.4...chart-v2.0.5) (2026-11-02)
+
+
+### Bug Fixes
+
+* **chart:** drain the proxy on termination and reject rewriting without PROXY_HOST ([#118](https://github.com/container-registry/helm-charts-oci-proxy/issues/118)) ([8a7137a](https://github.com/container-registry/helm-charts-oci-proxy/commit/8a7137a834a8e9389dcac1667e52bd1e4755aac6))
+
 ## [2.0.4](https://github.com/container-registry/helm-charts-oci-proxy/compare/chart-v2.0.3...chart-v2.0.4) (2026-11-02)
 
 
