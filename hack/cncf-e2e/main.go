@@ -51,6 +51,9 @@ func main() {
 	if *conc < 1 || *perHost < 1 {
 		log.Fatal("-concurrency and -per-host must be positive")
 	}
+	if err := validTarget(*target); err != nil {
+		log.Fatal(err)
+	}
 	var onlyRe *regexp.Regexp
 	var err error
 	if *only != "" {
@@ -137,6 +140,18 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("done in %s: %v; results in %s", wall.Round(time.Second), rep.classCounts(), *out)
+}
+
+// validTarget rejects a -target the sampler would ignore, which would leave the
+// report without memory figures.
+func validTarget(target string) error {
+	if target == "" {
+		return nil
+	}
+	if name, ok := strings.CutPrefix(target, "docker:"); !ok || name == "" {
+		return fmt.Errorf("-target %q: want docker:<container>", target)
+	}
+	return nil
 }
 
 func checkHelm3(bin string) error {

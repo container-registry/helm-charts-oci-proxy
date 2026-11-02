@@ -32,3 +32,12 @@ func TestPrintable_TruncatesAtRuneBoundary(t *testing.T) {
 		t.Errorf("printable returned %d bytes starting %q, want the 2047-byte text prefix", len(got), got[:min(len(got), 20)])
 	}
 }
+
+// A -target without the docker: prefix was ignored without a word.
+func TestValidTarget(t *testing.T) {
+	for target, ok := range map[string]bool{"": true, "docker:chartproxy": true, "chartproxy": false, "docker:": false, "1234": false} {
+		if err := validTarget(target); (err == nil) != ok {
+			t.Errorf("validTarget(%q) = %v, want ok=%v", target, err, ok)
+		}
+	}
+}
