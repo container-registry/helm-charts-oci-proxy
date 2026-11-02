@@ -21,6 +21,16 @@ tasks:
     cmds:
       - go vet ./...
 
+  e2e-cncf:
+    desc: Check every CNCF chart on Artifact Hub through a running proxy (external network; see hack/cncf-e2e)
+    vars:
+      PROXY: '{{default "http://127.0.0.1:19100" .PROXY}}'
+      HELM: '{{default "helm" .HELM}}'
+      OUT: '{{default "cncf-e2e-out" .OUT}}'
+    cmds:
+      - go build -o .bin/cncf-e2e ./hack/cncf-e2e
+      - .bin/cncf-e2e -proxy {{.PROXY}} -helm {{.HELM}} -out {{.OUT}} {{.CLI_ARGS}}
+
   run:
     desc: Build and run the proxy locally with TLS and debug enabled
     cmds:

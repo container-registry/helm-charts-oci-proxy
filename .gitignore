@@ -21,3 +21,4 @@ go.work
 .idea
 .env
 .secrets
+cncf-e2e-out/
