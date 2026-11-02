@@ -128,7 +128,7 @@ func fetch(args []string) {
 		}
 		resolved := 0
 		for ref := range wanted[indexPath] {
-			cv, err := idx.Get(ref.chart, ref.version)
+			cv, err := manifest.ResolveVersion(idx, ref.chart, ref.version)
 			if err != nil || len(cv.URLs) == 0 {
 				continue
 			}
@@ -226,7 +226,7 @@ func readRequests(path string, from, to time.Time) (map[string]map[chartRef]bool
 		if ref == "" || strings.HasPrefix(ref, "sha256:") {
 			continue
 		}
-		out[indexPath][chartRef{repo[k+1:], manifest.IndexReference(manifest.ManifestTarget(ref))}] = true
+		out[indexPath][chartRef{repo[k+1:], manifest.ManifestTarget(ref)}] = true
 	}
 	return out, nil
 }

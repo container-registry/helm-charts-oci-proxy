@@ -33,6 +33,7 @@ type Discovery struct {
 	Query     string    `json:"query"`
 	Total     int       `json:"total"`
 	Packages  []Package `json:"packages"`
+	Warning   string    `json:"warning,omitempty"`
 }
 
 func loadOrDiscover(path string, refresh bool, c *http.Client, base string, deprecated bool) (*Discovery, bool, error) {
@@ -55,6 +56,10 @@ func loadOrDiscover(path string, refresh bool, c *http.Client, base string, depr
 	if err != nil {
 		return nil, false, err
 	}
+	// An incomplete package list must not outlive this run.
+	if d.Warning != "" {
+		return d, false, nil
+	}
 	raw, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
 		return nil, false, err
@@ -62,8 +67,8 @@ func loadOrDiscover(path string, refresh bool, c *http.Client, base string, depr
 	return d, false, os.WriteFile(path, raw, 0o644)
 }
 
-// discover pages through the search the Artifact Hub UI runs for
-// ?kind=0&cncf=true. Like the UI, it leaves out deprecated packages unless asked.
+// discoveryQuery is the search the Artifact Hub UI runs for ?kind=0&cncf=true.
+// Like the UI, it leaves out deprecated packages unless asked.
 func discoveryQuery(deprecated bool) string {
 	if deprecated {
 		return "kind=0&cncf=true&deprecated=true"
@@ -71,7 +76,37 @@ func discoveryQuery(deprecated bool) string {
 	return "kind=0&cncf=true"
 }
 
+// discoveryAttempts and discoveryRetryDelay bound how often a discovery whose
+// page count drifted from Pagination-Total-Count is repeated; packages added or
+// removed while paging shift the offsets. Variables so tests do not wait.
+var (
+	discoveryAttempts   = 3
+	discoveryRetryDelay = 5 * time.Second
+)
+
+// discover pages through the search and repeats it while the result disagrees
+// with the reported total. A persisting difference is kept as a warning rather
+// than failing the run.
 func discover(c *http.Client, base string, deprecated bool) (*Discovery, error) {
+	var d *Discovery
+	for attempt := 1; ; attempt++ {
+		var err error
+		if d, err = discoverOnce(c, base, deprecated); err != nil {
+			return nil, err
+		}
+		if len(d.Packages) == d.Total {
+			return d, nil
+		}
+		d.Warning = fmt.Sprintf("artifact hub reported %d packages, pagination returned %d distinct (after %d attempts)", d.Total, len(d.Packages), attempt)
+		if attempt >= discoveryAttempts {
+			log.Printf("warning: %s", d.Warning)
+			return d, nil
+		}
+		time.Sleep(discoveryRetryDelay)
+	}
+}
+
+func discoverOnce(c *http.Client, base string, deprecated bool) (*Discovery, error) {
 	q := discoveryQuery(deprecated)
 	d := &Discovery{FetchedAt: time.Now().UTC(), Query: q}
 	seen := map[string]bool{}
@@ -92,9 +127,6 @@ func discover(c *http.Client, base string, deprecated bool) (*Discovery, error) 
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
-	}
-	if len(d.Packages) != d.Total {
-		return nil, fmt.Errorf("artifact hub reported %d packages, pagination returned %d distinct", d.Total, len(d.Packages))
 	}
 	return d, nil
 }

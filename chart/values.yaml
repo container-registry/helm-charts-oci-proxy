@@ -101,7 +101,19 @@ app:
     INDEX_CACHE_TTL: 14400
     INDEX_ERROR_CACHE_TTL: 30
     REWRITE_DEPENDENCIES: false
+    # Required when REWRITE_DEPENDENCIES is true; a bare host[:port].
     PROXY_HOST: ""
+    # Seconds the proxy lets in-flight requests finish after SIGTERM.
+    SHUTDOWN_TIMEOUT: 25
+
+# On termination the pod first sleeps preStopSleepSeconds, so endpoints and
+# ingress controllers stop routing to it, then the proxy gets SIGTERM and drains
+# for SHUTDOWN_TIMEOUT. terminationGracePeriodSeconds defaults to
+# preStopSleepSeconds + SHUTDOWN_TIMEOUT + 5; an explicit value must cover both.
+shutdown:
+  # 0 disables the preStop hook.
+  preStopSleepSeconds: 5
+  terminationGracePeriodSeconds: null
 
 extraVolumes: []
 extraVolumeMounts: []
