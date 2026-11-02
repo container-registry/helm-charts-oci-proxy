@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 	"github.com/dgraph-io/ristretto"
 )
 
@@ -27,7 +26,7 @@ func TestZeroIndexErrorCacheTTLDoesNotCacheErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(cache.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexCacheMaxCost: 1 << 20}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{IndexCacheMaxCost: 1 << 20}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	repo := strings.TrimPrefix(srv.URL, "https://") + "/charts"
 	for range 2 {
@@ -41,9 +40,9 @@ func TestZeroIndexErrorCacheTTLDoesNotCacheErrors(t *testing.T) {
 }
 
 func TestZeroIndexErrorCacheTTLDoesNotCacheVersionFailures(t *testing.T) {
-	c := newFailureCache(0)
-	c.set("repo\x00ref", resultNotFound("repo", "ref"))
-	if err := c.get("repo\x00ref"); err != nil {
+	m := newTestManifests(t, Config{})
+	m.fail("repo", "ref", resultNotFound("repo", "ref"))
+	if err := m.failed("repo", "ref"); err != nil {
 		t.Fatalf("failure cached with TTL 0: %v", err)
 	}
 }

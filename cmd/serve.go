@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/manifest"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/registry"
 	"github.com/dgraph-io/ristretto"
@@ -92,9 +90,7 @@ chart repositories and kept only in memory, so nothing survives a restart.`,
 				defer diag.Close()
 			}
 
-			blobsHandler := mem.NewMemHandler()
-
-			manifests := manifest.NewManifests(ctx, blobsHandler, manifest.Config{
+			manifests := manifest.NewManifests(ctx, manifest.Config{
 				Debug:                cfg.debug,
 				CacheTTL:             cfg.manifestCacheTTL,
 				IndexCacheTTL:        cfg.indexCacheTTL,
@@ -106,12 +102,11 @@ chart repositories and kept only in memory, so nothing survives a restart.`,
 				AllowPrivateNetworks: cfg.allowPrivateNetworks,
 			}, indexCache, l)
 
-			blobsHttpHandler := blobs.NewBlobs(manifests.Blobs(), l)
 			s := &http.Server{
 				ReadHeaderTimeout: 5 * time.Second, // prevent slowloris, quiet linter
 				Handler: registry.New(
 					manifests.Handle,
-					blobsHttpHandler.Handle,
+					manifests.HandleBlobs,
 					manifests.HandleTags,
 					manifests.HandleCatalog,
 					registry.Debug(cfg.debug), registry.Logger(l)),

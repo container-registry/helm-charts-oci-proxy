@@ -1,9 +1,7 @@
 package manifest
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -14,8 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/opencontainers/go-digest"
 )
 
 type syncMapCache struct {
@@ -61,7 +58,7 @@ entries:
 	mux.HandleFunc("/demo-2.0.0.tgz", tgz)
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexErrorCacheTTL: time.Minute}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{IndexErrorCacheTTL: time.Minute}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	return m, strings.TrimPrefix(srv.URL, "https://") + "/demo"
 }
@@ -230,34 +227,82 @@ func TestPrepare_PanicFailsTheRequestOnly(t *testing.T) {
 	}
 }
 
-// The digest and tag entries of a chart reference the same blobs; expiring one
-// of them must not delete blobs the other still serves.
+// Versions of a repository that publish the same tarball share its layer;
+// expiring one of them must not stop serving the layer for the other.
 func TestCleanup_KeepsBlobsOfLiveManifests(t *testing.T) {
-	blobs := mem.NewMemHandler()
-	m := NewManifests(t.Context(), blobs, Config{CacheTTL: time.Minute}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := newTestManifests(t, Config{CacheTTL: time.Minute})
 	data := []byte("chart layer")
-	h, _, err := v1.SHA256(bytes.NewReader(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := blobs.Put(t.Context(), "", h, io.NopCloser(bytes.NewReader(data))); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-2 * time.Minute)
-	_ = m.Write("r/demo", "sha256:abc", Manifest{Refs: []string{h.String()}, CreatedAt: old})
-	_ = m.Write("r/demo", "1.0.0", Manifest{Refs: []string{h.String()}, CreatedAt: time.Now()})
+	d := digest.FromBytes(data)
+	layer := func() *blob { return &blob{digest: d, size: int64(len(data)), urls: []string{"https://u/x.tgz"}} }
+	old := time.Now().Add(-time.Second)
+	m.insert("r/demo", &record{layer: layer(), expires: old}, "sha256:abc", "1.0.0")
+	m.insert("r/demo", &record{layer: layer(), expires: time.Now().Add(time.Minute)}, "sha256:def", "1.0.1")
 
-	m.cleanup(t.Context())
-	if _, err := blobs.Stat(t.Context(), "", h); err != nil {
-		t.Fatalf("blob of a live manifest was deleted: %v", err)
+	m.cleanup()
+	if _, ok := m.findBlob("r/demo", d); !ok {
+		t.Fatal("layer of a live manifest is no longer served")
+	}
+	if names := m.names("r/demo"); len(names) != 2 {
+		t.Errorf("names after the first cleanup = %v, want the live version's two keys", names)
 	}
 
-	_ = m.Write("r/demo", "1.0.0", Manifest{Refs: []string{h.String()}, CreatedAt: old})
-	m.cleanup(t.Context())
-	if _, err := blobs.Stat(t.Context(), "", h); err == nil {
-		t.Error("blob still stored after every manifest referencing it expired")
+	m.mu.Lock()
+	m.records["r/demo"]["1.0.1"].expires = old
+	m.mu.Unlock()
+	m.cleanup()
+	if _, ok := m.findBlob("r/demo", d); ok {
+		t.Error("layer still served after every manifest referencing it expired")
 	}
 	if names := m.names("r/demo"); len(names) != 0 {
 		t.Errorf("expired manifests still listed: %v", names)
+	}
+}
+
+// A sweep of missing versions with the failure cache full must not scan every
+// record on each insert, and a manifest insert never scans.
+func TestStore_ExpiryScanIsAmortised(t *testing.T) {
+	m := newTestManifests(t, Config{IndexErrorCacheTTL: time.Hour})
+	for i := range maxFailures {
+		m.fail("r/demo", fmt.Sprint("f", i), resultNotFound("r/demo", "x"))
+	}
+	before := recordExpireScans.Value()
+	start := time.Now()
+	for i := range 1000 {
+		m.fail("r/demo", fmt.Sprint("g", i), resultNotFound("r/demo", "x"))
+		m.insert("r/demo", &record{expires: time.Now().Add(time.Hour)}, fmt.Sprint("v", i))
+	}
+	if limit := 1 + int64(time.Since(start)/expireInterval); recordExpireScans.Value()-before > limit {
+		t.Errorf("%d expiry scans for 2000 inserts, want at most %d", recordExpireScans.Value()-before, limit)
+	}
+	if m.failures > maxFailures {
+		t.Errorf("%d failures cached, bound is %d", m.failures, maxFailures)
+	}
+}
+
+// A failure for a key that already holds a prepared chart is dropped; the
+// digest must not answer 404 for a chart that was stored under it.
+func TestStore_FailureNeverReplacesManifest(t *testing.T) {
+	m := newTestManifests(t, Config{IndexErrorCacheTTL: time.Hour})
+	m.insert("r/demo", &record{digest: "sha256:abc", expires: time.Now().Add(time.Hour)}, "sha256:abc", "1.0.0")
+	m.fail("r/demo", "sha256:abc", resultNotFound("r/demo", "sha256:abc"))
+	if r := m.lookup("r/demo", "sha256:abc"); r == nil || r.err != nil {
+		t.Fatalf("lookup after a failure for a stored digest = %+v, want the manifest", r)
+	}
+	if m.failures != 0 {
+		t.Errorf("%d failures counted, want 0", m.failures)
+	}
+}
+
+// Prepared charts do not count against the failure budget: with the map full
+// of manifests, a 404 is still remembered and a sweep does not reach the
+// upstream on every request.
+func TestStore_FailuresStayCachedUnderManifestLoad(t *testing.T) {
+	m := newTestManifests(t, Config{IndexErrorCacheTTL: time.Hour})
+	for i := range maxFailures {
+		m.insert("r/demo", &record{expires: time.Now().Add(time.Hour)}, fmt.Sprint("sha256:", i), fmt.Sprint("v", i))
+	}
+	m.fail("r/demo", "missing", resultNotFound("r/demo", "missing"))
+	if m.failed("r/demo", "missing") == nil {
+		t.Fatal("a 404 was not cached while prepared charts fill the map")
 	}
 }

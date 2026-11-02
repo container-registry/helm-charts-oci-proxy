@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
-	"sync"
 	"time"
 
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
@@ -16,29 +15,27 @@ import (
 // version waits for it and the result is cached for all of them.
 const prepareTimeout = 2 * time.Minute
 
-func (m *Manifests) manifest(ctx context.Context, repo, target string) (Manifest, *errors.RegError) {
-	if ma, err := m.Read(repo, target); err == nil {
-		return ma, nil
+func (m *Manifests) manifest(ctx context.Context, repo, target string) (*record, *errors.RegError) {
+	if r := m.lookup(repo, target); r != nil && r.err == nil {
+		return r, nil
 	}
 	if err := m.prepare(ctx, repo, target); err != nil {
-		return Manifest{}, err
+		return nil, err
 	}
-	if ma, err := m.Read(repo, target); err == nil {
-		return ma, nil
+	if r := m.lookup(repo, target); r != nil && r.err == nil {
+		return r, nil
 	}
-	return Manifest{}, resultNotFound(repo, target)
+	return nil, resultNotFound(repo, target)
 }
 
 // prepare runs prepareChart once per (repo, reference), however many requests
 // ask for it at the same time, and at most PrepareConcurrency at once because
-// each one holds an upstream connection and, when dependencies are rewritten,
-// the whole tarball.
+// each one holds an upstream connection.
 func (m *Manifests) prepare(ctx context.Context, repo, reference string) *errors.RegError {
-	key := repo + "\x00" + reference
-	if rerr := m.failures.get(key); rerr != nil {
+	if rerr := m.failed(repo, reference); rerr != nil {
 		return rerr
 	}
-	ch := m.prepares.DoChan(key, func() (_ interface{}, err error) {
+	ch := m.prepares.DoChan(repo+"\x00"+reference, func() (_ interface{}, err error) {
 		// singleflight re-panics on a new goroutine, where nothing can recover
 		// it and the whole process would exit.
 		defer func() {
@@ -51,7 +48,7 @@ func (m *Manifests) prepare(ctx context.Context, repo, reference string) *errors
 		if m.prepared(repo, reference) {
 			return nil, nil
 		}
-		if rerr := m.failures.get(key); rerr != nil {
+		if rerr := m.failed(repo, reference); rerr != nil {
 			return nil, rerr
 		}
 		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), prepareTimeout)
@@ -75,7 +72,7 @@ func (m *Manifests) prepare(ctx context.Context, repo, reference string) *errors
 		}
 		if rerr != nil {
 			if rerr.Status == http.StatusNotFound || rerr.Status == http.StatusForbidden {
-				m.failures.set(key, rerr)
+				m.fail(repo, reference, rerr)
 			}
 			return nil, rerr
 		}
@@ -100,8 +97,15 @@ func (m *Manifests) prepared(repo, reference string) bool {
 	if reference == "" {
 		return len(m.names(repo)) > 0
 	}
-	_, err := m.Read(repo, reference)
-	return err == nil
+	r := m.lookup(repo, reference)
+	return r != nil && r.err == nil
+}
+
+func (m *Manifests) failed(repo, reference string) *errors.RegError {
+	if r := m.lookup(repo, reference); r != nil {
+		return r.err
+	}
+	return nil
 }
 
 func resultNotFound(repo, target string) *errors.RegError {
@@ -110,71 +114,4 @@ func resultNotFound(repo, target string) *errors.RegError {
 		Code:    "MANIFEST_UNKNOWN",
 		Message: fmt.Sprintf("Chart prepare's result not found: %v, %v", repo, target),
 	}
-}
-
-func (m *Manifests) names(repo string) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	c := m.manifests[repo]
-	out := make([]string, 0, len(c))
-	for k := range c {
-		out = append(out, k)
-	}
-	return out
-}
-
-// failureCache remembers chart versions the upstream definitively answered
-// with 404 or 403, so a sweep over a missing version reaches the upstream once
-// per TTL. It is kept out of the index cache so a 404 sweep cannot evict parsed
-// indexes, and so an entry is visible to the very next request (ristretto
-// applies writes asynchronously and may drop them).
-type failureCache struct {
-	mu  sync.Mutex
-	ttl time.Duration
-	m   map[string]failure
-}
-
-type failure struct {
-	err   *errors.RegError
-	until time.Time
-}
-
-const maxFailures = 16384
-
-func newFailureCache(ttl time.Duration) *failureCache {
-	return &failureCache{ttl: ttl, m: map[string]failure{}}
-}
-
-func (c *failureCache) get(key string) *errors.RegError {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	f, ok := c.m[key]
-	if !ok {
-		return nil
-	}
-	if time.Now().After(f.until) {
-		delete(c.m, key)
-		return nil
-	}
-	return f.err
-}
-
-func (c *failureCache) set(key string, err *errors.RegError) {
-	if c.ttl <= 0 {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	now := time.Now()
-	if len(c.m) >= maxFailures {
-		for k, f := range c.m {
-			if now.After(f.until) {
-				delete(c.m, k)
-			}
-		}
-		if len(c.m) >= maxFailures {
-			return
-		}
-	}
-	c.m[key] = failure{err: err, until: now.Add(c.ttl)}
 }

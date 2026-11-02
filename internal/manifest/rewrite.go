@@ -4,214 +4,158 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/url"
+	"path"
 	"strings"
 
 	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
 	"sigs.k8s.io/yaml"
 )
-
-// RewriteResult contains information about what was rewritten
-type RewriteResult struct {
-	Modified     bool
-	Dependencies []RewrittenDependency
-}
-
-// RewrittenDependency records a single dependency URL rewrite
-type RewrittenDependency struct {
-	Name        string
-	OriginalURL string
-	NewURL      string
-	Skipped     bool
-	SkipReason  string
-}
 
 // Logger interface for logging
 type Logger interface {
 	Printf(format string, v ...interface{})
 }
 
-// rewriteChartDependencies extracts Chart.yaml from a tarball, rewrites dependency
-// repository URLs to point through the proxy, and repacks the tarball.
-// If no dependencies need rewriting, returns the original data unchanged.
-func rewriteChartDependencies(tarballData []byte, proxyHost string, log Logger) ([]byte, *RewriteResult, error) {
-	result := &RewriteResult{}
+// rewriteReader yields a chart archive with its dependencies rewritten while
+// the archive it reads from streams in.
+type rewriteReader struct {
+	*io.PipeReader
+	src  io.Closer
+	done chan struct{}
+	// modified is valid once Read returned io.EOF.
+	modified bool
+	err      error // valid after Close
+}
 
-	// Extract Chart.yaml
-	metadata, chartYAMLPath, err := extractChartYAML(tarballData)
+// rewriteError is a failure of the rewrite itself on an archive that was read
+// fine, such as an entry archive/tar reads but cannot write.
+type rewriteError struct{ error }
+
+func (e rewriteError) Unwrap() error { return e.error }
+
+// failed reports whether the rewrite itself failed. Call it after Close.
+func (r *rewriteReader) failed() bool {
+	var re rewriteError
+	return stderrors.As(r.err, &re)
+}
+
+// Close stops the rewrite and returns once it no longer reads src, so a
+// caller may inspect what src counted.
+func (r *rewriteReader) Close() error {
+	r.PipeReader.Close()
+	err := r.src.Close()
+	<-r.done
+	return err
+}
+
+// rewriteStream rewrites the chart archive src as it is read. src is read to
+// its end, so a hash taken while it streams covers every byte.
+func rewriteStream(src io.ReadCloser, proxyHost string, log Logger) *rewriteReader {
+	pr, pw := io.Pipe()
+	r := &rewriteReader{PipeReader: pr, src: src, done: make(chan struct{})}
+	go func() {
+		defer close(r.done)
+		modified, err := rewriteChart(pw, src, proxyHost, log)
+		if err == nil {
+			_, err = io.Copy(io.Discard, src)
+		}
+		r.modified, r.err = modified, err
+		pw.CloseWithError(err)
+	}()
+	return r
+}
+
+// rewriteChart copies the chart archive src to dst with the dependency
+// repositories of the chart's own Chart.yaml pointed at proxyHost; a
+// subchart's charts/<x>/Chart.yaml is copied as it is. The copy is always
+// recompressed, which gives the same bytes for the same input; modified
+// reports whether any dependency was rewritten.
+func rewriteChart(dst io.Writer, src io.Reader, proxyHost string, log Logger) (modified bool, err error) {
+	zr, err := gzip.NewReader(src)
 	if err != nil {
-		return tarballData, result, fmt.Errorf("failed to extract Chart.yaml: %w", err)
+		return false, err
 	}
-
-	if metadata == nil || len(metadata.Dependencies) == 0 {
-		// No dependencies to rewrite
-		return tarballData, result, nil
-	}
-
-	// Rewrite dependency URLs
-	modified := false
-	for _, dep := range metadata.Dependencies {
-		if dep == nil {
-			continue
+	defer zr.Close()
+	tr := tar.NewReader(zr)
+	zw := gzip.NewWriter(dst)
+	tw := tar.NewWriter(zw)
+	for {
+		hd, err := tr.Next()
+		if err == io.EOF {
+			break
 		}
-		originalURL := dep.Repository
-
-		if !shouldRewriteURL(originalURL) {
-			result.Dependencies = append(result.Dependencies, RewrittenDependency{
-				Name:        dep.Name,
-				OriginalURL: originalURL,
-				Skipped:     true,
-				SkipReason:  getSkipReason(originalURL),
-			})
-			continue
-		}
-
-		newURL, wasOCI, err := rewriteDependencyURL(originalURL, proxyHost)
 		if err != nil {
-			if log != nil {
-				log.Printf("warning: failed to rewrite dependency %s URL %s: %v", dep.Name, originalURL, err)
+			return false, err
+		}
+		var data io.Reader = tr
+		if _, rel := splitEntry(hd.Name); path.Clean(rel) == "Chart.yaml" {
+			if hd.Size > loader.MaxDecompressedFileSize {
+				return false, fmt.Errorf("Chart.yaml is larger than the maximum file size %d", loader.MaxDecompressedFileSize)
 			}
-			result.Dependencies = append(result.Dependencies, RewrittenDependency{
-				Name:        dep.Name,
-				OriginalURL: originalURL,
-				Skipped:     true,
-				SkipReason:  err.Error(),
-			})
+			chartYAML, err := io.ReadAll(tr)
+			if err != nil {
+				return false, err
+			}
+			if out, ok := rewriteChartYAML(chartYAML, proxyHost, log); ok {
+				chartYAML, modified = out, true
+				h := *hd
+				h.Size = int64(len(out))
+				hd = &h
+			}
+			data = bytes.NewReader(chartYAML)
+		}
+		if err := tw.WriteHeader(hd); err != nil {
+			// A reader that stopped reading closes the pipe; only a header
+			// archive/tar refuses to write is the rewrite's own failure.
+			if stderrors.Is(err, io.ErrClosedPipe) {
+				return false, err
+			}
+			return false, rewriteError{err}
+		}
+		if _, err := io.Copy(tw, data); err != nil {
+			return false, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return false, err
+	}
+	return modified, zw.Close()
+}
+
+// rewriteChartYAML points the dependency repositories of a Chart.yaml at
+// proxyHost and reports false when there is nothing to rewrite. A Chart.yaml
+// that does not parse is left to readChartMetadata, which rejects the chart.
+func rewriteChartYAML(data []byte, proxyHost string, log Logger) ([]byte, bool) {
+	var md chart.Metadata
+	if err := yaml.Unmarshal(data, &md); err != nil {
+		return nil, false
+	}
+	modified := false
+	for _, dep := range md.Dependencies {
+		if dep == nil || !shouldRewriteURL(dep.Repository) {
 			continue
 		}
-
-		if wasOCI && log != nil {
-			log.Printf("debug: rewriting OCI dependency %s URL %s (proxy may not support OCI-to-OCI proxying yet)", dep.Name, originalURL)
+		newURL, wasOCI, err := rewriteDependencyURL(dep.Repository, proxyHost)
+		if err != nil {
+			log.Printf("warning: failed to rewrite dependency %s URL %s: %v", dep.Name, dep.Repository, err)
+			continue
 		}
-
+		if wasOCI {
+			log.Printf("debug: rewriting OCI dependency %s URL %s (proxy may not support OCI-to-OCI proxying yet)", dep.Name, dep.Repository)
+		}
 		dep.Repository = newURL
 		modified = true
-		result.Dependencies = append(result.Dependencies, RewrittenDependency{
-			Name:        dep.Name,
-			OriginalURL: originalURL,
-			NewURL:      newURL,
-		})
 	}
-
 	if !modified {
-		return tarballData, result, nil
+		return nil, false
 	}
-
-	result.Modified = true
-
-	// Replace Chart.yaml in tarball
-	newTarball, err := replaceChartYAML(tarballData, chartYAMLPath, metadata)
-	if err != nil {
-		return tarballData, result, fmt.Errorf("failed to replace Chart.yaml: %w", err)
-	}
-
-	return newTarball, result, nil
-}
-
-// extractChartYAML extracts Chart.yaml from a gzipped tarball and returns
-// the parsed metadata and the path to Chart.yaml within the archive.
-func extractChartYAML(tarballData []byte) (*chart.Metadata, string, error) {
-	gzr, err := gzip.NewReader(bytes.NewReader(tarballData))
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer func() { _ = gzr.Close() }()
-
-	tr := tar.NewReader(gzr)
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to read tar entry: %w", err)
-		}
-
-		// Chart.yaml is typically at <chart-name>/Chart.yaml
-		if strings.HasSuffix(header.Name, "/Chart.yaml") || header.Name == "Chart.yaml" {
-			data, err := io.ReadAll(tr)
-			if err != nil {
-				return nil, "", fmt.Errorf("failed to read Chart.yaml: %w", err)
-			}
-
-			var metadata chart.Metadata
-			if err := yaml.Unmarshal(data, &metadata); err != nil {
-				return nil, "", fmt.Errorf("failed to parse Chart.yaml: %w", err)
-			}
-
-			return &metadata, header.Name, nil
-		}
-	}
-
-	return nil, "", fmt.Errorf("chart.yaml not found in tarball")
-}
-
-// replaceChartYAML replaces Chart.yaml in a gzipped tarball with new metadata
-func replaceChartYAML(tarballData []byte, chartYAMLPath string, metadata *chart.Metadata) ([]byte, error) {
-	// Marshal new metadata
-	newChartYAML, err := yaml.Marshal(metadata)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal Chart.yaml: %w", err)
-	}
-
-	// Read original tarball
-	gzr, err := gzip.NewReader(bytes.NewReader(tarballData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer func() { _ = gzr.Close() }()
-
-	tr := tar.NewReader(gzr)
-
-	// Create new tarball
-	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gzw)
-
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to read tar entry: %w", err)
-		}
-
-		if header.Name == chartYAMLPath {
-			// Replace Chart.yaml
-			newHeader := *header
-			newHeader.Size = int64(len(newChartYAML))
-
-			if err := tw.WriteHeader(&newHeader); err != nil {
-				return nil, fmt.Errorf("failed to write tar header: %w", err)
-			}
-			if _, err := tw.Write(newChartYAML); err != nil {
-				return nil, fmt.Errorf("failed to write Chart.yaml: %w", err)
-			}
-		} else {
-			// Copy entry as-is
-			if err := tw.WriteHeader(header); err != nil {
-				return nil, fmt.Errorf("failed to write tar header: %w", err)
-			}
-			if header.Size > 0 {
-				if _, err := io.Copy(tw, tr); err != nil {
-					return nil, fmt.Errorf("failed to copy tar entry: %w", err)
-				}
-			}
-		}
-	}
-
-	if err := tw.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close tar writer: %w", err)
-	}
-	if err := gzw.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
-	}
-
-	return buf.Bytes(), nil
+	out, err := yaml.Marshal(&md)
+	return out, err == nil
 }
 
 // rewriteDependencyURL transforms a dependency repository URL to go through the proxy.
@@ -275,18 +219,4 @@ func shouldRewriteURL(repoURL string) bool {
 	}
 
 	return true
-}
-
-// getSkipReason returns a human-readable reason why a URL was skipped
-func getSkipReason(repoURL string) string {
-	if repoURL == "" {
-		return "empty URL"
-	}
-	if strings.HasPrefix(repoURL, "@") || strings.HasPrefix(repoURL, "alias:") {
-		return "Helm repo alias"
-	}
-	if strings.HasPrefix(repoURL, "file://") || strings.HasPrefix(repoURL, "file:") {
-		return "local file reference"
-	}
-	return "unknown"
 }

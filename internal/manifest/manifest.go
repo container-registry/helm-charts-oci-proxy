@@ -3,10 +3,7 @@ package manifest
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,10 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
 )
@@ -33,51 +29,37 @@ type listTags struct {
 	Tags []string `json:"tags"`
 }
 
-type Manifest struct {
-	ContentType string    `json:"contentType"`
-	Blob        []byte    `json:"blob"`
-	Refs        []string  `json:"refs"` // referenced blobs digests
-	CreatedAt   time.Time `json:"createdAt"`
-}
-
 type Manifests struct {
-	// maps repo -> Manifest tag/digest -> Manifest
-	manifests map[string]map[string]Manifest
-	mu        sync.RWMutex // guards manifests; never held during network I/O
-	// copyMu keeps cleanup from deleting content-addressed blobs that a
-	// preparation has just Put but not yet referenced from a manifest.
-	copyMu      sync.RWMutex
+	// repo -> chart version or manifest digest -> record; both keys of a
+	// prepared chart version share one record.
+	records     map[string]map[string]*record
+	failures    int          // keys in records that hold a failure
+	nextExpire  time.Time    // earliest time insert may scan for expired records
+	mu          sync.RWMutex // guards records, failures and nextExpire; never held during network I/O
 	prepares    singleflight.Group
 	indexes     singleflight.Group
 	slots       chan struct{}
-	failures    *failureCache
 	log         logrus.StdLogger
 	cache       Cache
-	blobHandler handler.BlobHandler
-	blobs       *streamBlobs
 	config      Config
 	httpClient  *http.Client
 	layerClient *http.Client
 }
 
-func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config Config, cache Cache, log logrus.StdLogger) *Manifests {
+func NewManifests(ctx context.Context, config Config, cache Cache, log logrus.StdLogger) *Manifests {
 	concurrency := config.PrepareConcurrency
 	if concurrency <= 0 {
 		concurrency = DefaultPrepareConcurrency
 	}
 	ma := &Manifests{
-		manifests:   map[string]map[string]Manifest{},
-		blobHandler: blobHandler,
-		log:         log,
-		config:      config,
-		cache:       cache,
-		httpClient:  newDownloadClient(config.AllowPrivateNetworks),
-		slots:       make(chan struct{}, concurrency),
-		failures:    newFailureCache(config.IndexErrorCacheTTL),
+		records:    map[string]map[string]*record{},
+		log:        log,
+		config:     config,
+		cache:      cache,
+		httpClient: newDownloadClient(config.AllowPrivateNetworks),
+		slots:      make(chan struct{}, concurrency),
 	}
 	ma.layerClient = newLayerClient(ma.httpClient)
-	ma.blobs = newStreamBlobs(blobHandler, ma.openLayer)
-	ma.blobHandler = ma.blobs
 
 	go func() {
 		ticker := time.NewTicker(time.Minute)
@@ -85,7 +67,7 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 		for {
 			select {
 			case <-ticker.C:
-				ma.cleanup(ctx)
+				ma.cleanup()
 			case <-ctx.Done():
 				return
 			}
@@ -95,112 +77,40 @@ func NewManifests(ctx context.Context, blobHandler handler.BlobHandler, config C
 	return ma
 }
 
-// cleanup drops expired manifests. A blob is deleted only when no remaining
-// manifest references it: the digest and tag entries of one chart, and charts
-// that share a tarball, reference the same content-addressed blobs.
-func (m *Manifests) cleanup(ctx context.Context) {
-	if m.config.Debug {
-		m.log.Println("cleanup cycle")
-	}
-	m.copyMu.Lock()
-	defer m.copyMu.Unlock()
-
-	cutoff := time.Now().Add(-m.config.CacheTTL)
-	expired := map[string]struct{}{}
-	live := map[string]struct{}{}
-	m.mu.Lock()
-	for repo, entries := range m.manifests {
-		for k, v := range entries {
-			refs := live
-			if v.CreatedAt.Before(cutoff) {
-				delete(entries, k)
-				refs = expired
-			}
-			for _, r := range v.Refs {
-				refs[r] = struct{}{}
-			}
-		}
-		if len(entries) == 0 {
-			delete(m.manifests, repo)
-		}
-	}
-	m.mu.Unlock()
-
-	del, ok := m.blobHandler.(handler.BlobDeleteHandler)
-	if !ok {
-		return
-	}
-	for ref := range expired {
-		if _, inUse := live[ref]; inUse {
-			continue
-		}
-		h, err := v1.NewHash(ref)
-		if err != nil {
-			continue
-		}
-		if m.config.Debug {
-			m.log.Printf("deleting blob %s", h.String())
-		}
-		if err := del.Delete(ctx, "", h); err != nil && !stderrors.Is(err, blobs.ErrNotFound) {
-			m.log.Println(err)
-		}
-	}
-}
-
-// Blobs is the blob handler to serve: local blobs plus chart layers streamed
-// from their upstream.
-func (m *Manifests) Blobs() handler.BlobHandler {
-	return m.blobs
-}
-
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-an-image
 func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
-	elem := strings.Split(req.URL.Path, "/")
-
-	if len(elem) < 3 {
+	repo, _, ref, ok := helper.SplitPath(req.URL.Path)
+	if !ok {
 		return &errors.RegError{
 			Status:  http.StatusBadRequest,
 			Code:    "INVALID PARAMS",
 			Message: "No chart name specified",
 		}
 	}
-
-	elem = elem[1:]
-	// Cached manifests are keyed by the index version, or by the tag that named
-	// it with the leading "v" added or removed (see prepareChart).
-	target := ManifestTarget(elem[len(elem)-1])
-
-	var repoParts []string
-	for i := len(elem) - 3; i > 0; i-- {
-		if elem[i] == "v2" {
-			//enough
-			break
-		}
-		repoParts = append(repoParts, elem[i])
-	}
-	sort.SliceStable(repoParts, func(i, j int) bool {
-		//reverse
-		return i > j
-	})
-	repo := strings.Join(repoParts, "/")
+	// Cached manifests are keyed by the index version, so the tag form is
+	// normalised once here and never looked up again.
+	target := ManifestTarget(ref)
 
 	switch req.Method {
 	case http.MethodGet, http.MethodHead:
-		ma, err := m.manifest(req.Context(), repo, target)
+		// A chart is <index path>/<chart>. The 500 is the answer prepareChart
+		// gave for every other shape before this check existed.
+		if !strings.Contains(repo, "/") {
+			return errors.RegErrInternal(fmt.Errorf("invalid repo length"))
+		}
+		r, err := m.manifest(req.Context(), repo, target)
 		if err != nil {
 			return err
 		}
-		rd := sha256.Sum256(ma.Blob)
-		d := "sha256:" + hex.EncodeToString(rd[:])
-		resp.Header().Set("Docker-Content-Digest", d)
-		resp.Header().Set("Content-Type", ma.ContentType)
-		resp.Header().Set("Content-Length", fmt.Sprint(len(ma.Blob)))
+		resp.Header().Set("Docker-Content-Digest", r.digest)
+		resp.Header().Set("Content-Type", ocispec.MediaTypeImageManifest)
+		resp.Header().Set("Content-Length", fmt.Sprint(len(r.manifest)))
 		resp.WriteHeader(http.StatusOK)
 		if req.Method == http.MethodHead {
 			return nil
 		}
-		if _, err := io.Copy(resp, bytes.NewReader(ma.Blob)); err != nil {
+		if _, err := resp.Write(r.manifest); err != nil {
 			return errors.RegErrInternal(err)
 		}
 		return nil
@@ -215,35 +125,15 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 }
 
 func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) error {
-	elem := strings.Split(req.URL.Path, "/")
-	if len(elem) < 4 {
+	fullRepo, _, _, ok := helper.SplitPath(req.URL.Path)
+	// /v2/tags/list has no repository, and a chart needs a repository path.
+	if !ok || !strings.Contains(fullRepo, "/") {
 		return &errors.RegError{
 			Status:  http.StatusBadRequest,
 			Code:    "INVALID PARAMS",
 			Message: "No chart name specified",
 		}
 	}
-	var repoParts []string
-	for i := len(elem) - 3; i > 0; i-- {
-		if elem[i] == "v2" {
-			//stop
-			break
-		}
-		repoParts = append(repoParts, elem[i])
-	}
-	sort.SliceStable(repoParts, func(i, j int) bool {
-		//reverse
-		return i > j
-	})
-	// /v2/tags/list passes the len(elem) check above but yields no parts at all.
-	if len(repoParts) < 2 {
-		return &errors.RegError{
-			Status:  http.StatusBadRequest,
-			Code:    "INVALID PARAMS",
-			Message: "No chart name specified",
-		}
-	}
-	fullRepo := strings.Join(repoParts, "/")
 
 	if req.Method != "GET" {
 		return &errors.RegError{
@@ -252,8 +142,8 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 			Message: "We don't understand your method + url",
 		}
 	}
-	repoPath := strings.Join(repoParts[:len(repoParts)-1], "/")
-	chartName := repoParts[len(repoParts)-1]
+	i := strings.LastIndexByte(fullRepo, '/')
+	repoPath, chartName := fullRepo[:i], fullRepo[i+1:]
 
 	var tags []string
 	var fromIndex bool
@@ -335,34 +225,6 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	return nil
 }
 
-func (m *Manifests) Read(repo string, name string) (Manifest, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	mRepo, ok := m.manifests[repo]
-	if !ok {
-		return Manifest{}, fmt.Errorf("repository not found")
-	}
-	ma, ok := mRepo[name]
-	if !ok {
-		return Manifest{}, fmt.Errorf("manifest not found")
-	}
-	return ma, nil
-}
-
-func (m *Manifests) Write(repo string, name string, n Manifest) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	mRepo, ok := m.manifests[repo]
-	if !ok {
-		mRepo = map[string]Manifest{}
-		m.manifests[repo] = mRepo
-	}
-	mRepo[name] = n
-	return nil
-}
-
 func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) error {
 	query := req.URL.Query()
 	nStr := query.Get("n")
@@ -409,7 +271,10 @@ func (m *Manifests) HandleCatalog(resp http.ResponseWriter, req *http.Request) e
 		defer m.mu.RUnlock()
 
 		// TODO: implement pagination
-		for key := range m.manifests {
+		for key, entries := range m.records {
+			if !hasManifest(entries) {
+				continue
+			}
 			if countRepos >= n {
 				break
 			}

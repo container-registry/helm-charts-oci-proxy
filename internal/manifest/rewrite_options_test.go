@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 	"helm.sh/helm/v3/pkg/chart"
 )
 
@@ -36,7 +35,7 @@ func rewriteUpstream(t *testing.T) (repo string, client *http.Client) {
 
 func rewriteManifests(t *testing.T, cfg Config, client *http.Client) *Manifests {
 	t.Helper()
-	m := NewManifests(t.Context(), mem.NewMemHandler(), cfg, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), cfg, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = client
 	m.layerClient = newLayerClient(client)
 	return m

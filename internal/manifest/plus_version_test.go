@@ -12,8 +12,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 )
 
 // chartTarball returns a minimal gzipped chart archive containing only Chart.yaml.
@@ -66,7 +64,7 @@ entries:
 	srv = httptest.NewTLSServer(mux)
 	defer srv.Close()
 
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 	// The test server is on loopback with a self-signed certificate, which the
 	// production download client refuses by design.
 	m.httpClient = srv.Client()

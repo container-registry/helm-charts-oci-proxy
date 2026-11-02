@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 )
 
 type costCache struct{ costs map[interface{}]int64 }
@@ -44,7 +42,7 @@ func TestGetIndex_ParseFailureIsChargedAsError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	cc := &costCache{costs: map[interface{}]int64{}}
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexCacheMaxCost: 128 << 20, IndexErrorCacheTTL: time.Minute}, cc, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{IndexCacheMaxCost: 128 << 20, IndexErrorCacheTTL: time.Minute}, cc, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	host := strings.TrimPrefix(srv.URL, "https://")
 	if _, err := m.GetIndex(host); err == nil {
@@ -62,7 +60,7 @@ func TestGetIndex_PartialIndexIsNotCached(t *testing.T) {
 		_, _ = w.Write([]byte("apiVersion: \"\"\nentries:\n  demo:\n    - name: demo\n      version: 1.0.0\n      urls: [demo-1.0.0.tgz]\n"))
 	}))
 	t.Cleanup(srv.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexCacheMaxCost: 128 << 20}, &costCache{costs: map[interface{}]int64{}}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{IndexCacheMaxCost: 128 << 20}, &costCache{costs: map[interface{}]int64{}}, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	idx, err := m.GetIndex(strings.TrimPrefix(srv.URL, "https://"))
 	if err == nil {

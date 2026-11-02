@@ -52,12 +52,7 @@ func readChartMetadata(r io.Reader) (*chart.Metadata, error) {
 			continue
 		}
 
-		delimiter := "/"
-		if strings.ContainsRune(hd.Name, '\\') {
-			delimiter = "\\"
-		}
-		parts := strings.Split(hd.Name, delimiter)
-		n := strings.ReplaceAll(strings.Join(parts[1:], delimiter), delimiter, "/")
+		top, n := splitEntry(hd.Name)
 		if path.IsAbs(n) {
 			return nil, stderrors.New("chart illegally contains absolute paths")
 		}
@@ -71,7 +66,7 @@ func readChartMetadata(r io.Reader) (*chart.Metadata, error) {
 		if chartDrivePath.MatchString(n) {
 			return nil, stderrors.New("chart contains illegally named files")
 		}
-		if parts[0] == "Chart.yaml" {
+		if top == "Chart.yaml" {
 			return nil, stderrors.New("chart yaml not in base directory")
 		}
 		if hd.Size > remaining {
@@ -108,6 +103,17 @@ func readChartMetadata(r io.Reader) (*chart.Metadata, error) {
 		return nil, err
 	}
 	return ch.Metadata, nil
+}
+
+// splitEntry splits an archive entry name into its top-level directory and the
+// path below it, as helm's loader does before it cleans the path.
+func splitEntry(name string) (top, rel string) {
+	delimiter := "/"
+	if strings.ContainsRune(name, '\\') {
+		delimiter = "\\"
+	}
+	parts := strings.Split(name, delimiter)
+	return parts[0], strings.ReplaceAll(strings.Join(parts[1:], delimiter), delimiter, "/")
 }
 
 // parsedByLoader reports whether loader.LoadFiles parses the file, so that a
