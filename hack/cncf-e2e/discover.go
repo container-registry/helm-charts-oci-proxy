@@ -56,6 +56,10 @@ func loadOrDiscover(path string, refresh bool, c *http.Client, base string, depr
 	if err != nil {
 		return nil, false, err
 	}
+	// An incomplete package list must not outlive this run.
+	if d.Warning != "" {
+		return d, false, nil
+	}
 	raw, err := json.MarshalIndent(d, "", "  ")
 	if err != nil {
 		return nil, false, err

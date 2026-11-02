@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -47,5 +50,20 @@ func TestDiscover_ToleratesCountDrift(t *testing.T) {
 	if err != nil || len(d.Packages) != 2 || !strings.Contains(d.Warning, "reported 3 packages") || searches.Load() != int32(discoveryAttempts) {
 		t.Errorf("persisting drift: err %v, %d packages, warning %q, %d searches; want 2 packages, a warning, %d searches",
 			err, len(d.Packages), d.Warning, searches.Load(), discoveryAttempts)
+	}
+}
+
+// A discovery that ended with a count warning is incomplete; caching it would
+// make every later run without -refresh check the same partial list.
+func TestLoadOrDiscover_DoesNotCacheDriftedResult(t *testing.T) {
+	discoveryRetryDelay = 0
+	srv, _ := driftServer(t, 3, func(int32) int { return 2 })
+	path := filepath.Join(t.TempDir(), "discovery.json")
+	d, cached, err := loadOrDiscover(path, false, srv.Client(), srv.URL, false)
+	if err != nil || cached || d.Warning == "" {
+		t.Fatalf("err %v cached %v warning %q; want a fresh result with a warning", err, cached, d.Warning)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("discovery.json written for a drifted result (stat err %v)", err)
 	}
 }
