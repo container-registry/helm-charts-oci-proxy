@@ -313,13 +313,15 @@ func TestRewrite_LayerIsRewrittenOnEveryRead(t *testing.T) {
 }
 
 // A chart helm rejects is rejected with rewriting on as well, while the rewrite
-// still streams the rest of the archive.
+// still streams the rest of the archive: one download, no fallback.
 func TestRewrite_InvalidChartFailsCleanly(t *testing.T) {
 	noise := make([]byte, 256<<10)
 	_, _ = rand.Read(noise)
 	f := newStreamFixture(t)
 	f.m.config.RewriteDependencies = true
 	f.m.config.ProxyHost = "proxy.example.com"
+	var logs bytes.Buffer
+	f.m.log = log.New(&logs, "", 0)
 	f.serve.Store(tarballOf(t, [][2]string{
 		{"demo/Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")},
 		{"demo/values.yaml", "a: [\n"},
@@ -329,6 +331,12 @@ func TestRewrite_InvalidChartFailsCleanly(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/"+f.repo+"/manifests/1.0.0", nil)
 	if err := f.m.Handle(rec, req); err == nil {
 		t.Fatal("a chart helm rejects was prepared")
+	}
+	if n := f.downloads.Load(); n != 1 {
+		t.Errorf("%d downloads of a chart helm rejects, want 1", n)
+	}
+	if strings.Contains(logs.String(), "failed to rewrite") {
+		t.Errorf("an invalid chart was logged as a rewrite failure: %s", logs.String())
 	}
 }
 
@@ -521,5 +529,21 @@ func TestRewrite_BackslashChartYAMLIsRewritten(t *testing.T) {
 	modified, err := rewriteChart(io.Discard, bytes.NewReader(tgz), "proxy.example.com", log.New(io.Discard, "", 0))
 	if err != nil || !modified {
 		t.Fatalf("rewriteChart: modified %v, %v; want the chart's Chart.yaml rewritten", modified, err)
+	}
+}
+
+// A rewrite whose reader went away fails writing to the pipe; that is not a
+// failure of the rewrite, so the preparation must not fall back to fetching
+// the chart again. gzip writes its header on the first tar header, so the
+// closed pipe surfaces from tw.WriteHeader.
+func TestRewriteStream_ClosedReaderIsNotARewriteFailure(t *testing.T) {
+	tgz := tarballOf(t, [][2]string{{"demo/Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")}})
+	rw := rewriteStream(io.NopCloser(bytes.NewReader(tgz)), "proxy.example.com", log.New(io.Discard, "", 0))
+	rw.Close()
+	if rw.err == nil {
+		t.Fatal("the rewrite did not fail writing to the closed pipe; the test proves nothing")
+	}
+	if rw.failed() {
+		t.Fatalf("a closed pipe was classified as a rewrite failure: %v", rw.err)
 	}
 }

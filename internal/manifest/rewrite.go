@@ -110,6 +110,11 @@ func rewriteChart(dst io.Writer, src io.Reader, proxyHost string, log Logger) (m
 			data = bytes.NewReader(chartYAML)
 		}
 		if err := tw.WriteHeader(hd); err != nil {
+			// A reader that stopped reading closes the pipe; only a header
+			// archive/tar refuses to write is the rewrite's own failure.
+			if stderrors.Is(err, io.ErrClosedPipe) {
+				return false, err
+			}
 			return false, rewriteError{err}
 		}
 		if _, err := io.Copy(tw, data); err != nil {
