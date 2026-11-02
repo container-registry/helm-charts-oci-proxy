@@ -89,7 +89,7 @@ func main() {
 	defer os.RemoveAll(work)
 	k := newChecker(pu, client, guardUpstream(client, *allowPrivate), *helmBin, work, *timeout, *retryDelay)
 
-	jobs := buildJobs(k, disc.Packages, *allVersions, onlyRe)
+	jobs := buildJobs(k, disc.Packages, *allVersions, onlyRe, *conc)
 	log.Printf("%d charts to check, concurrency %d, %d per host", len(jobs), *conc, *perHost)
 
 	ctx, stopSampling := context.WithCancel(context.Background())
@@ -175,12 +175,18 @@ func (j job) host() string {
 	return u.Host
 }
 
-func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp) []job {
-	var jobs []job
+func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp, conc int) []job {
+	var selected []Package
 	for _, p := range pkgs {
-		if only != nil && !only.MatchString(strings.TrimSuffix(p.Repository.URL, "/")+"/"+p.Name) {
-			continue
+		if only == nil || only.MatchString(strings.TrimSuffix(p.Repository.URL, "/")+"/"+p.Name) {
+			selected = append(selected, p)
 		}
+	}
+	if allVersions {
+		prefetchIndexes(k, selected, conc)
+	}
+	var jobs []job
+	for _, p := range selected {
 		if !allVersions || !strings.HasPrefix(p.Repository.URL, "https://") {
 			jobs = append(jobs, job{pkg: p, version: p.Version})
 			continue
@@ -196,6 +202,29 @@ func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp
 		}
 	}
 	return interleaveByHost(jobs)
+}
+
+// prefetchIndexes loads the index of every https repository, at most conc at a
+// time, so -all-versions does not fetch them one after another before any check starts.
+func prefetchIndexes(k *checker, pkgs []Package, conc int) {
+	urls := map[string]bool{}
+	for _, p := range pkgs {
+		if strings.HasPrefix(p.Repository.URL, "https://") {
+			urls[p.Repository.URL] = true
+		}
+	}
+	sem := make(chan struct{}, conc)
+	var wg sync.WaitGroup
+	for u := range urls {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			_, _ = k.idx.get(u)
+		}()
+	}
+	wg.Wait()
 }
 
 // interleaveByHost orders jobs round-robin across hosts so the per-host limit
