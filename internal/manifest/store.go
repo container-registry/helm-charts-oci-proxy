@@ -102,7 +102,6 @@ func (m *Manifests) insert(repo string, r *record, refs ...string) {
 	}
 }
 
-// fail remembers a definitive failure to prepare ref.
 func (m *Manifests) fail(repo, ref string, err *errors.RegError) {
 	if m.config.IndexErrorCacheTTL <= 0 {
 		return
@@ -110,7 +109,7 @@ func (m *Manifests) fail(repo, ref string, err *errors.RegError) {
 	m.insert(repo, &record{err: err, expires: time.Now().Add(m.config.IndexErrorCacheTTL)}, ref)
 }
 
-// expire drops the records that expired before now. m.mu must be held.
+// m.mu must be held.
 func (m *Manifests) expire(now time.Time) {
 	recordExpireScans.Add(1)
 	for repo, entries := range m.records {
@@ -137,7 +136,6 @@ func (m *Manifests) cleanup() {
 	m.expire(time.Now())
 }
 
-// names lists the references of repo that have a manifest.
 func (m *Manifests) names(repo string) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -159,7 +157,8 @@ func hasManifest(entries map[string]*record) bool {
 	return false
 }
 
-// findBlob looks d up among the blobs of the manifests held for repo.
+// Only repo's records are searched, so a blob is served under the repository
+// whose manifest references it.
 func (m *Manifests) findBlob(repo string, d digest.Digest) (blob, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -175,7 +174,6 @@ func (m *Manifests) findBlob(repo string, d digest.Digest) (blob, bool) {
 	return blob{}, false
 }
 
-// demote moves url to the end of the sources of layer d in repo.
 func (m *Manifests) demote(repo string, d digest.Digest, url string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

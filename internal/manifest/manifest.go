@@ -88,8 +88,8 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 			Message: "No chart name specified",
 		}
 	}
-	// A chart is <index path>/<chart>; main answered every other shape with
-	// this error from prepareChart.
+	// A chart is <index path>/<chart>. The 500 is the answer prepareChart gave
+	// for every other shape before this check existed; clients may rely on it.
 	if !strings.Contains(repo, "/") {
 		return errors.RegErrInternal(fmt.Errorf("invalid repo length"))
 	}

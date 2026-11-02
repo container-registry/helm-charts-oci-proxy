@@ -334,8 +334,8 @@ func TestRouting_PrefixedPathMatchesPlain(t *testing.T) {
 	}
 }
 
-// /v2/v2/... leaves no repository between the last "v2" and the kind. Main
-// answered such manifests 500 and blobs 404; nothing is looked up under "".
+// /v2/v2/... leaves no repository between the last "v2" and the kind. Such
+// manifests answer 500 and blobs 404 without a lookup under "".
 func TestHandlers_EmptyRepositoryIsNeverLookedUp(t *testing.T) {
 	m := newTestManifests(t, Config{})
 	data := []byte("config")

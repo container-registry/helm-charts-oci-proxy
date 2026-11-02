@@ -18,9 +18,9 @@ import "strings"
 
 // SplitPath splits [<prefix>/]v2/<repo>/<kind>/<ref>. Harbor's proxy cache puts
 // its own path in front of /v2/, so the repository is what lies between the
-// last "v2" segment and kind; without one, the first segment is dropped, as
-// the manifest handler on main did. The manifest, tag and blob handlers share it, so
-// a blob is looked up under the same repository key as its manifest.
+// last "v2" segment and kind; without one, the first segment is dropped. The
+// manifest, tag and blob handlers share it, so a blob is looked up under the
+// same repository key as its manifest.
 func SplitPath(p string) (repo, kind, ref string, ok bool) {
 	elem := strings.Split(p, "/")
 	n := len(elem)
