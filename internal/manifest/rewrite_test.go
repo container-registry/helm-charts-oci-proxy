@@ -443,6 +443,26 @@ func TestRewrite_ReadFailureIsNotRetriedUnrewritten(t *testing.T) {
 	}
 }
 
+// helm cleans entry paths, so demo/./Chart.yaml is the chart's own Chart.yaml
+// and demo/charts/sub/./Chart.yaml is still a subchart's.
+func TestRewrite_ChartYAMLPathIsNormalised(t *testing.T) {
+	tgz := tarballOf(t, [][2]string{
+		{"demo/charts/sub/./Chart.yaml", chartWithDependency("sub", "https://sub.example.com/charts")},
+		{"demo/./Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")},
+	})
+	var out bytes.Buffer
+	if _, err := rewriteChart(&out, bytes.NewReader(tgz), "proxy.example.com", log.New(io.Discard, "", 0)); err != nil {
+		t.Fatal(err)
+	}
+	got := chartYAMLs(t, out.Bytes())
+	if r := got["demo/./Chart.yaml"].Dependencies[0].Repository; r != "oci://proxy.example.com/top.example.com/charts" {
+		t.Errorf("chart dependency repository = %s, not rewritten", r)
+	}
+	if r := got["demo/charts/sub/./Chart.yaml"].Dependencies[0].Repository; r != "https://sub.example.com/charts" {
+		t.Errorf("subchart dependency repository = %s, want it unchanged", r)
+	}
+}
+
 // A source whose archive cannot be rewritten fails before EOF; it must move to
 // the back like a mismatching one, so the retry reaches the next source.
 func TestRewrite_FailedSourceIsTriedLast(t *testing.T) {

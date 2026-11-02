@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"path"
 	"strings"
 
 	"helm.sh/helm/v3/pkg/chart"
@@ -92,7 +93,7 @@ func rewriteChart(dst io.Writer, src io.Reader, proxyHost string, log Logger) (m
 			return false, err
 		}
 		var data io.Reader = tr
-		if _, name, _ := strings.Cut(hd.Name, "/"); name == "Chart.yaml" {
+		if _, rel := splitEntry(hd.Name); path.Clean(rel) == "Chart.yaml" {
 			if hd.Size > loader.MaxDecompressedFileSize {
 				return false, fmt.Errorf("Chart.yaml is larger than the maximum file size %d", loader.MaxDecompressedFileSize)
 			}
