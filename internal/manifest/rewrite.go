@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -27,6 +28,19 @@ type rewriteReader struct {
 	done chan struct{}
 	// modified is valid once Read returned io.EOF.
 	modified bool
+	err      error // valid after Close
+}
+
+// rewriteError is a failure of the rewrite itself on an archive that was read
+// fine, such as an entry archive/tar reads but cannot write.
+type rewriteError struct{ error }
+
+func (e rewriteError) Unwrap() error { return e.error }
+
+// failed reports whether the rewrite itself failed. Call it after Close.
+func (r *rewriteReader) failed() bool {
+	var re rewriteError
+	return stderrors.As(r.err, &re)
 }
 
 // Close stops the rewrite and returns once it no longer reads src, so a
@@ -49,7 +63,7 @@ func rewriteStream(src io.ReadCloser, proxyHost string, log Logger) *rewriteRead
 		if err == nil {
 			_, err = io.Copy(io.Discard, src)
 		}
-		r.modified = modified
+		r.modified, r.err = modified, err
 		pw.CloseWithError(err)
 	}()
 	return r
@@ -95,7 +109,7 @@ func rewriteChart(dst io.Writer, src io.Reader, proxyHost string, log Logger) (m
 			data = bytes.NewReader(chartYAML)
 		}
 		if err := tw.WriteHeader(hd); err != nil {
-			return false, err
+			return false, rewriteError{err}
 		}
 		if _, err := io.Copy(tw, data); err != nil {
 			return false, err

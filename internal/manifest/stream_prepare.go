@@ -98,6 +98,11 @@ func (m *Manifests) prepareStreamed(ctx context.Context, repoKey string, chartVe
 		if counter.n > maxDownloadSize {
 			return upstreamError("upstream %s response exceeds %d bytes", downloadURL, maxDownloadSize)
 		}
+		// A chart whose dependencies cannot be rewritten is served as published.
+		if rw != nil && rw.failed() {
+			m.log.Printf("warning: failed to rewrite dependencies of %s, serving the original: %v", downloadURL, err)
+			return m.prepareStreamed(ctx, repoKey, chartVer, downloadURL, reference, "")
+		}
 		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadURL, err)
 	}
 	// The layer digest covers every byte, including what follows the tar end.

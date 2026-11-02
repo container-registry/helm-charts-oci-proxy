@@ -371,3 +371,73 @@ func TestRewriteStream_CloseStopsReading(t *testing.T) {
 		t.Fatal("the rewrite still read its source after Close returned")
 	}
 }
+
+// unrewritableChart is a chart helm loads whose rewrite fails: archive/tar
+// reads a regular file named with a trailing "/" but refuses to write one.
+func unrewritableChart(t *testing.T) []byte {
+	t.Helper()
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	for _, f := range [][2]string{
+		{"demo/Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")},
+		{"demo/templates/cm.yaml", "kind: ConfigMap\n"},
+	} {
+		if err := tw.WriteHeader(&tar.Header{Name: f[0], Mode: 0o644, Size: int64(len(f[1])), Format: tar.FormatUSTAR}); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write([]byte(f[1]))
+	}
+	_ = tw.Close()
+	b := raw.Bytes()
+	h := bytes.Index(b, []byte("demo/templates/cm.yaml"))
+	b[h+len("demo/templates/cm.yaml")-1] = '/'
+	copy(b[h+148:h+156], "        ")
+	sum := 0
+	for _, c := range b[h : h+512] {
+		sum += int(c)
+	}
+	copy(b[h+148:h+156], fmt.Sprintf("%06o\x00 ", sum))
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write(b)
+	_ = zw.Close()
+	if _, err := rewriteChart(io.Discard, bytes.NewReader(gz.Bytes()), "proxy.example.com", log.New(io.Discard, "", 0)); err == nil {
+		t.Fatal("the rewrite succeeded; the test chart proves nothing")
+	}
+	return gz.Bytes()
+}
+
+// Before streaming, a chart whose dependencies could not be rewritten was
+// served unchanged instead of failing.
+func TestRewrite_FailureServesOriginal(t *testing.T) {
+	f := newStreamFixture(t)
+	f.m.config.RewriteDependencies = true
+	f.m.config.ProxyHost = "proxy.example.com"
+	tgz := unrewritableChart(t)
+	f.serve.Store(tgz)
+	d := f.layer(t)
+	if d != digest.FromBytes(tgz) {
+		t.Fatalf("layer %s, want the original archive %s", d, digest.FromBytes(tgz))
+	}
+	if got := readLayer(t, f, d); !bytes.Equal(got, tgz) {
+		t.Fatal("layer GET did not return the original archive")
+	}
+}
+
+// Only a failure of the rewrite itself falls back to the original archive; an
+// archive that cannot be read is an upstream fault and is not fetched again.
+func TestRewrite_ReadFailureIsNotRetriedUnrewritten(t *testing.T) {
+	f := newStreamFixture(t)
+	f.m.config.RewriteDependencies = true
+	f.m.config.ProxyHost = "proxy.example.com"
+	tgz := tarballOf(t, [][2]string{{"demo/Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")}})
+	f.serve.Store(tgz[:len(tgz)/2])
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/"+f.repo+"/manifests/1.0.0", nil)
+	if got := regStatus(t, f.m.Handle(rec, req)); got != http.StatusBadGateway {
+		t.Errorf("status %d, want 502", got)
+	}
+	if n := f.downloads.Load(); n != 1 {
+		t.Errorf("%d downloads of a truncated archive, want 1", n)
+	}
+}
