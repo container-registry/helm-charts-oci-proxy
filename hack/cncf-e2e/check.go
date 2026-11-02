@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -225,6 +226,8 @@ func (k *checker) viaProxy(r *Result, up *upstream) (*Evidence, error) {
 	name := up.repoPath + "/" + up.cv.Name
 	tag := strings.ReplaceAll(up.cv.Version, "+", "_")
 	base := k.proxy.String() + "/v2/" + name
+	// Digests describe this attempt only; a retry must not report the last one's.
+	r.ManifestDigest, r.LayerDigest = "", ""
 
 	body, pe, err := k.proxyGet("manifest", base+"/manifests/"+tag, ocispec.MediaTypeImageManifest, 4<<20)
 	if err != nil {
@@ -445,19 +448,62 @@ func getBytes(c *http.Client, u string, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("GET %s: %w", u, err)
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("GET %s: body exceeds %d bytes", u, limit)
+		return nil, &tooLargeError{url: u, limit: limit}
 	}
 	return data, nil
 }
 
-// getRetry repeats a failed GET once unless the upstream said the content is gone.
+type tooLargeError struct {
+	url   string
+	limit int64
+}
+
+func (e *tooLargeError) Error() string {
+	return fmt.Sprintf("GET %s: body exceeds %d bytes", e.url, e.limit)
+}
+
+// retryBackoff is a variable so tests do not wait.
+var retryBackoff = 5 * time.Second
+
+// transient reports whether repeating the request can succeed: timeouts,
+// connection and read failures, temporary DNS errors and 408, 429 or 5xx
+// answers. Everything else, such as policy refusals, other 4xx, an oversized
+// body or too many redirects, gives the same result again.
+func transient(err error) bool {
+	if err == nil || isPolicyError(err) {
+		return false
+	}
+	var tl *tooLargeError
+	if errors.As(err, &tl) {
+		return false
+	}
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.status == http.StatusRequestTimeout || se.status == http.StatusTooManyRequests || se.status >= 500
+	}
+	// *url.Error implements net.Error for every client error, so only its
+	// Timeout answer counts, not the type.
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	// A DNS error sits inside a *net.OpError; NXDOMAIN does not go away.
+	var de *net.DNSError
+	if errors.As(err, &de) {
+		return de.IsTimeout || de.IsTemporary
+	}
+	var oe *net.OpError
+	return errors.As(err, &oe) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// getRetry repeats a GET once after a transient failure.
 func getRetry(c *http.Client, u string, limit int64) ([]byte, int, error) {
 	data, err := getBytes(c, u, limit)
-	var se *statusError
-	if err != nil && !isPolicyError(err) && !(errors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone)) {
-		time.Sleep(5 * time.Second)
+	if transient(err) {
+		time.Sleep(retryBackoff)
 		data, err = getBytes(c, u, limit)
 	}
+	var se *statusError
 	if errors.As(err, &se) {
 		return nil, se.status, err
 	}
