@@ -294,20 +294,21 @@ func TestRewrite_TopLevelChartYAMLOnly(t *testing.T) {
 // A rewritten layer is not stored: every blob GET rewrites the upstream
 // tarball again, so the rewrite must give the same bytes each time it runs.
 func TestRewrite_LayerIsRewrittenOnEveryRead(t *testing.T) {
-	var layers []digest.Digest
-	for range 2 {
-		f := rewritingFixture(t)
-		d := f.layer(t)
-		if b, _ := f.m.findBlob(f.repo, d); b.data != nil {
-			t.Fatalf("the rewritten tarball (%d bytes) is held in memory", len(b.data))
-		}
-		if got := digest.FromBytes(readLayer(t, f, d)); got != d {
-			t.Fatalf("layer read %s, manifest says %s", got, d)
-		}
-		layers = append(layers, d)
+	f := rewritingFixture(t)
+	d := f.layer(t)
+	if b, _ := f.m.findBlob(f.repo, d); b.data != nil {
+		t.Fatalf("the rewritten tarball (%d bytes) is held in memory", len(b.data))
 	}
-	if layers[0] != layers[1] {
-		t.Errorf("two preparations of one tarball gave layers %s and %s", layers[0], layers[1])
+	first := readLayer(t, f, d)
+	second := readLayer(t, f, d)
+	if got := digest.FromBytes(first); got != d || !bytes.Equal(first, second) {
+		t.Fatalf("layer reads %s and %s, manifest says %s", got, digest.FromBytes(second), d)
+	}
+	if n := f.downloads.Load(); n != 3 {
+		t.Errorf("%d upstream downloads, want 3 (manifest, then each read)", n)
+	}
+	if other := rewritingFixture(t).layer(t); other != d {
+		t.Errorf("two preparations of one tarball gave layers %s and %s", d, other)
 	}
 }
 

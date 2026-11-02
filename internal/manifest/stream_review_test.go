@@ -309,7 +309,7 @@ func TestBlob_ExpiredManifestIsUnknown(t *testing.T) {
 func TestRouting_PrefixedPathMatchesPlain(t *testing.T) {
 	f := newStreamFixture(t)
 	d := f.layer(t)
-	h := registry.New(handle(f.m.Handle), handle(f.m.HandleBlobs), handle(f.m.HandleTags), handle(f.m.HandleCatalog))
+	h := registry.New(f.m.Handle, f.m.HandleBlobs, f.m.HandleTags, f.m.HandleCatalog)
 	host := strings.TrimSuffix(f.repo, "/demo")
 	get := func(method, p string) (int, string, string) {
 		rec := httptest.NewRecorder()
@@ -333,8 +333,6 @@ func TestRouting_PrefixedPathMatchesPlain(t *testing.T) {
 		}
 	}
 }
-
-func handle(f func(http.ResponseWriter, *http.Request) error) registry.Handler { return f }
 
 // /v2/v2/... leaves no repository between the last "v2" and the kind. Main
 // answered such manifests 500 and blobs 404; nothing is looked up under "".
