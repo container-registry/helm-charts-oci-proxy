@@ -20,8 +20,8 @@ spec:
       retries: 3
       remediateLastFailure: true
   values:
-    # Single replica and Recreate on purpose: blobs live in a per-pod in-memory
-    # store (cmd/serve.go, mem.NewMemHandler), so any second pod, including the
+    # Single replica and Recreate on purpose: blobs are resolved from per-pod
+    # in-memory manifest records (internal/manifest/store.go), so any second pod, including the
     # surge pod of a RollingUpdate, answers 404 for blobs whose manifest the
     # other pod served. Verified against a running deployment: 3 of 3 cold
     # charts failed with 2 replicas. The cost is a few seconds of downtime per

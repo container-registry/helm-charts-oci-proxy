@@ -185,7 +185,7 @@ A variable that is set but empty is treated as unset. An invalid value stops the
 * `INDEX_CACHE_TTL` - for how long we store chart index file content, the default value is `14400` seconds (4h). Must be at least `1`.
 * `INDEX_CACHE_SIZE_MIB` - size budget in MiB for cached index files. A parsed index is charged twice its YAML size, and one larger than the budget is charged the whole budget; the largest public index (bitnami, 27.5MB) takes about 55MiB. Indexes still in use by in-flight requests or being parsed are outside the budget, so it is not a hard memory limit. Default `128`, valid from 1 to 1048576.
 * `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. Also how long a chart version that does not exist upstream (404 or 410), or that the proxy refuses to fetch (403, e.g. a non-https URL), is answered from memory. Other upstream failures are retried on the next request. `0` disables this caching, so every request retries the upstream. The default value is `30` seconds.
-* `PREPARE_CONCURRENCY` - how many chart versions are downloaded and converted at once. Each holds an upstream connection, and with dependency rewriting the whole tarball, while it runs. Requests for one version share one preparation. Default `4`.
+* `PREPARE_CONCURRENCY` - how many chart versions are downloaded and converted at once. Each holds an upstream connection while it runs. Requests for one version share one preparation. Default `4`.
 * `USE_TLS` - enabled HTTP over TLS
 * `CERT_FILE` - TLS certificate path when `USE_TLS` is set, default `certs/registry.pem`
 * `KEY_FILE` - TLS private key path when `USE_TLS` is set, default `certs/registry-key.pem`
@@ -193,7 +193,7 @@ A variable that is set but empty is treated as unset. An invalid value stops the
 * `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Applies to every request. Requires `PROXY_HOST`; the proxy refuses to start without it. Default is `false`.
 * `PROXY_HOST` - the proxy host used in rewritten dependency URLs, as a bare `host[:port]` such as `chartproxy.example.com`, without scheme, path or trailing slash. Required when `REWRITE_DEPENDENCIES` is `true`.
 * `ALLOW_PRIVATE_NETWORKS` - allow upstream downloads from private, loopback, and link-local addresses. Off by default as an SSRF guard; enable only when proxying chart repositories on an internal network. Default is `false`.
-* `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, in-memory blob store size). Unset by default, which disables the listener. Never expose it through the public ingress.
+* `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, layers streamed). Unset by default, which disables the listener. Never expose it through the public ingress.
 
 ### Dependency URL Rewriting
 

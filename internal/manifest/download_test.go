@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 )
 
@@ -44,7 +43,7 @@ entries:
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	return m, strings.TrimPrefix(srv.URL, "https://") + "/demo"
 }
@@ -115,7 +114,7 @@ func TestPrepareChart_UpstreamErrorIsNeverPackaged(t *testing.T) {
 			if got := regStatus(t, err); got != tc.want {
 				t.Errorf("status = %d, want %d (%v)", got, tc.want, err)
 			}
-			if n := len(m.manifests[repo]); n != 0 {
+			if n := len(m.names(repo)); n != 0 {
 				t.Errorf("%d manifests stored for a failed download", n)
 			}
 		})
@@ -147,7 +146,7 @@ entries:
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
 
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	repo := strings.TrimPrefix(srv.URL, "https://") + "/demo"
 
@@ -233,7 +232,7 @@ func TestPrepareChart_IndexOutageIsBadGateway(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	_, err := getManifest(t, m, strings.TrimPrefix(srv.URL, "https://")+"/demo")
 	if got := regStatus(t, err); got != http.StatusBadGateway {
@@ -272,7 +271,7 @@ entries:
 `)
 	}))
 	t.Cleanup(srv.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/"+strings.TrimPrefix(srv.URL, "https://")+"/demo/tags/list", nil)

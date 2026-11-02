@@ -1,7 +1,6 @@
 package manifest
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	stderrors "errors"
@@ -16,23 +15,11 @@ import (
 
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
-	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/repo"
 	"sigs.k8s.io/yaml"
 )
-
-// extractChartMeta extracts metadata from a Helm chart archive.
-// This is used to populate the OCI config layer with Chart.yaml contents.
-func extractChartMeta(chartData []byte) (*chart.Metadata, error) {
-	ch, err := loader.LoadArchive(bytes.NewReader(chartData))
-	if err != nil {
-		return nil, err
-	}
-	return ch.Metadata, nil
-}
 
 // generateOCIAnnotations mirrors Helm's generateOCIAnnotations() behavior,
 // producing OCI image annotations from chart metadata.
@@ -181,49 +168,11 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 			Message: fmt.Sprintf("chart %s version %s is published only as OCI artifact %s; pull it from there", chartVer.Name, chartVer.Version, chartVer.URLs[0]),
 		}
 	}
-	downloadUrl := u.String()
-
-	proxyHost := m.config.ProxyHost
-	// Dependency rewriting changes the tarball, so only that path buffers it.
-	if !m.config.RewriteDependencies || proxyHost == "" {
-		return m.prepareStreamed(ctx, path, chartVer, downloadUrl, reference)
+	rewriteHost := ""
+	if m.config.RewriteDependencies {
+		rewriteHost = m.config.ProxyHost
 	}
-
-	manifestData, err := m.download(ctx, downloadUrl)
-	if err != nil {
-		return downloadError(err, "MANIFEST_UNKNOWN")
-	}
-	// Some hosts answer 200 with an HTML page for missing files; packaging that
-	// would hand clients a chart that cannot be installed.
-	if !isGzip(manifestData) {
-		return upstreamError("upstream %s did not return a gzip chart archive", downloadUrl)
-	}
-	m.checkIndexDigest(chartVer, digest.FromBytes(manifestData).Encoded())
-
-	// A gzip header alone does not make a chart: a truncated archive or
-	// gzip-compressed HTML passes isGzip but cannot be installed.
-	chartMeta, err := extractChartMeta(manifestData)
-	if err != nil {
-		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadUrl, err)
-	}
-
-	rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, proxyHost, m.log)
-	if rewriteErr != nil {
-		m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
-	} else if result.Modified {
-		// The config must describe the archive that is served.
-		if meta, err := extractChartMeta(rewrittenData); err != nil {
-			m.log.Printf("warning: rewritten chart is unreadable, serving the original: %v", err)
-		} else {
-			manifestData, chartMeta = rewrittenData, meta
-			if m.config.Debug {
-				m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
-			}
-		}
-	}
-
-	layer := layerDescriptor(downloadUrl, digest.FromBytes(manifestData), int64(len(manifestData)))
-	return m.storeChart(ctx, path, chartVer, reference, chartMeta, layer, manifestData, "")
+	return m.prepareStreamed(ctx, repo, chartVer, u.String(), reference, rewriteHost)
 }
 
 func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {

@@ -55,11 +55,21 @@ func versionTags(known, listed []string) []string {
 	return tags
 }
 
-// writeAlias stores the manifest cached for version also under tag. copyMu
-// keeps cleanup from deleting its blobs between the read and the write.
+// writeAlias stores the record cached for version also under tag.
 func (m *Manifests) writeAlias(repoKey, version, tag string) bool {
-	m.copyMu.RLock()
-	defer m.copyMu.RUnlock()
-	ma, err := m.Read(repoKey, version)
-	return err == nil && m.Write(repoKey, tag, ma) == nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entries := m.records[repoKey]
+	r := entries[version]
+	if r == nil || r.err != nil {
+		return false
+	}
+	if old := entries[tag]; old != nil {
+		if old.err == nil {
+			return true
+		}
+		m.failures--
+	}
+	entries[tag] = r
+	return true
 }

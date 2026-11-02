@@ -14,62 +14,24 @@
 
 package helper
 
-import (
-	"net/http"
-	"strings"
-)
+import "strings"
 
-// Returns whether this url should be handled by the Blob handler
-// This is complicated because Blob is indicated by the trailing path, not the leading path.
-// https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-a-layer
-// https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-a-layer
-func IsBlob(req *http.Request) bool {
-	elem := strings.Split(req.URL.Path, "/")
-	elem = elem[1:]
-	if elem[len(elem)-1] == "" {
-		elem = elem[:len(elem)-1]
+// SplitPath splits [<prefix>/]v2/<repo>/<kind>/<ref>. Harbor's proxy cache puts
+// its own path in front of /v2/, so the repository is what lies between the
+// last "v2" segment and kind; without one, the first segment is dropped. The
+// manifest, tag and blob handlers share it, so a blob is looked up under the
+// same repository key as its manifest.
+func SplitPath(p string) (repo, kind, ref string, ok bool) {
+	elem := strings.Split(p, "/")
+	n := len(elem)
+	if n < 5 {
+		return "", "", "", false
 	}
-	if len(elem) < 3 {
-		return false
+	start := n - 2
+	for start > 2 && elem[start-1] != "v2" {
+		start--
 	}
-	return elem[len(elem)-2] == "blobs" || (elem[len(elem)-3] == "blobs" &&
-		elem[len(elem)-2] == "uploads")
-}
-
-func IsManifest(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 4 {
-		return false
-	}
-	return elems[len(elems)-2] == "manifests"
-}
-
-func IsTags(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 4 {
-		return false
-	}
-	return elems[len(elems)-2] == "tags"
-}
-
-func IsCatalog(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 2 {
-		return false
-	}
-
-	return elems[len(elems)-1] == "_catalog"
-}
-
-func IsV2(req *http.Request) bool {
-	elems := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
-	if len(elems) < 1 {
-		return false
-	}
-	return elems[len(elems)-1] == "v2"
+	return strings.Join(elem[start:n-2], "/"), elem[n-2], elem[n-1], true
 }
 
 // Helm writes build metadata into OCI tags with "_" in place of "+", because the

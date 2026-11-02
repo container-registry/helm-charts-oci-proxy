@@ -3,6 +3,7 @@
 package manifest
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 )
 
 // TestAnnotationsPipeline_Integration downloads real chart tarballs from public
-// chart repositories and verifies the full extractChartMeta → generateOCIAnnotations
+// chart repositories and verifies the full readChartMetadata → generateOCIAnnotations
 // pipeline produces correct OCI annotations.
 //
 // Run with: go test ./internal/manifest/ -tags integration -run TestAnnotationsPipeline
@@ -94,9 +95,9 @@ func TestAnnotationsPipeline_Integration(t *testing.T) {
 			t.Logf("downloaded %d bytes", len(chartData))
 
 			// Step 3: Extract metadata (the function under test)
-			meta, err := extractChartMeta(chartData)
+			meta, err := readChartMetadata(bytes.NewReader(chartData))
 			if err != nil {
-				t.Fatalf("extractChartMeta failed: %v", err)
+				t.Fatalf("readChartMetadata failed: %v", err)
 			}
 			t.Logf("extracted metadata: name=%s version=%s", meta.Name, meta.Version)
 
@@ -204,7 +205,7 @@ func downloadBytes(t *testing.T, url string) []byte {
 	return data
 }
 
-// TestExtractChartMeta_Integration verifies extractChartMeta returns valid
+// TestExtractChartMeta_Integration verifies readChartMetadata returns valid
 // metadata from real chart tarballs, independent of annotation generation.
 func TestExtractChartMeta_Integration(t *testing.T) {
 	tests := []struct {
@@ -251,9 +252,9 @@ func TestExtractChartMeta_Integration(t *testing.T) {
 			chartURL := resolveChartURL(t, tt.indexURL, tt.chart, tt.version)
 			chartData := downloadBytes(t, chartURL)
 
-			meta, err := extractChartMeta(chartData)
+			meta, err := readChartMetadata(bytes.NewReader(chartData))
 			if err != nil {
-				t.Fatalf("extractChartMeta: %v", err)
+				t.Fatalf("readChartMetadata: %v", err)
 			}
 
 			if meta.Name != tt.wantName {

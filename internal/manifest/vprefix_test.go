@@ -14,7 +14,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -46,7 +45,7 @@ func versionsServer(t *testing.T, versions ...string) (*Manifests, string, map[s
 	})
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{}, &syncMapCache{m: map[interface{}]interface{}{}}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{}, &syncMapCache{m: map[interface{}]interface{}{}}, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	return m, strings.TrimPrefix(srv.URL, "https://") + "/demo", digests, &downloads
 }
