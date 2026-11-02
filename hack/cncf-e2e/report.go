@@ -20,6 +20,7 @@ type DiscoverySummary struct {
 	FetchedAt time.Time `json:"fetched_at"`
 	Packages  int       `json:"packages"`
 	Cached    bool      `json:"cached"`
+	Warning   string    `json:"warning,omitempty"`
 }
 
 type Report struct {
@@ -202,6 +203,9 @@ func (r *Report) markdown() string {
 	fmt.Fprintf(&b, "# %s\n\n", title)
 	fmt.Fprintf(&b, "- Proxy: `%s`, started %s, wall time %s\n", r.Proxy, r.StartedAt.Format(time.RFC3339), time.Duration(r.WallSeconds*float64(time.Second)).Round(time.Second))
 	fmt.Fprintf(&b, "- Discovery: Artifact Hub `%s`, %d packages, fetched %s (from cache: %v)\n", r.Discovery.Query, r.Discovery.Packages, r.Discovery.FetchedAt.Format(time.RFC3339), r.Discovery.Cached)
+	if r.Discovery.Warning != "" {
+		fmt.Fprintf(&b, "- Discovery warning: %s\n", r.Discovery.Warning)
+	}
 	versions := "latest version per package"
 	if r.AllVersions {
 		versions = "every version in the index"

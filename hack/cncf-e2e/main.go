@@ -127,7 +127,7 @@ func main() {
 		PerHost:     *perHost,
 		AllVersions: *allVersions,
 		Discovery: DiscoverySummary{
-			Query: disc.Query, FetchedAt: disc.FetchedAt, Packages: len(disc.Packages), Cached: cached,
+			Query: disc.Query, FetchedAt: disc.FetchedAt, Packages: len(disc.Packages), Cached: cached, Warning: disc.Warning,
 		},
 		Memory:   mem,
 		Counters: counters,
