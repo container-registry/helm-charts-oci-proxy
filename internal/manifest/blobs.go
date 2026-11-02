@@ -98,37 +98,45 @@ func (m *Manifests) openBlob(ctx context.Context, repo string, b blob) (io.ReadC
 		if b.rewriteHost != "" {
 			body = rewriteStream(body, b.rewriteHost, m.log)
 		}
-		// A republished upstream file fails at EOF; HandleBlobs then drops the
-		// connection before the last byte instead of completing the body. The
-		// status is already sent by then, so the source moves to the back and
-		// the client's retry is served by the next one.
-		return verifyLayer(body, b, func() { m.demote(repo, b.digest, url) }), nil
+		// A republished upstream file fails at EOF, a broken one or a failed
+		// rewrite earlier; HandleBlobs then drops the connection before the last
+		// byte instead of completing the body. The status is already sent by
+		// then, so the source moves to the back and the client's retry is served
+		// by the next one. A client that went away says nothing about the source.
+		return verifyLayer(body, b, func() {
+			if ctx.Err() == nil {
+				m.demote(repo, b.digest, url)
+			}
+		}), nil
 	}
 	return nil, downloadError(lastErr, "BLOB_UNKNOWN")
 }
 
 // verifiedLayer reads at most the layer's size and fails at EOF unless the
-// bytes read match the layer's digest.
+// bytes read match the layer's digest. fail runs once on the first error.
 type verifiedLayer struct {
 	io.Closer
 	r        io.Reader
 	verifier digest.Verifier
 	want     digest.Digest
-	mismatch func()
+	fail     func()
 }
 
-func verifyLayer(body io.ReadCloser, b blob, mismatch func()) *verifiedLayer {
-	return &verifiedLayer{Closer: body, r: io.LimitReader(body, b.size), verifier: b.digest.Verifier(), want: b.digest, mismatch: mismatch}
+func verifyLayer(body io.ReadCloser, b blob, fail func()) *verifiedLayer {
+	return &verifiedLayer{Closer: body, r: io.LimitReader(body, b.size), verifier: b.digest.Verifier(), want: b.digest, fail: fail}
 }
 
 func (v *verifiedLayer) Read(p []byte) (int, error) {
 	n, err := v.r.Read(p)
 	v.verifier.Write(p[:n])
-	if err == io.EOF && !v.verifier.Verified() {
-		v.mismatch()
-		v.mismatch = func() {}
-		return n, fmt.Errorf("upstream content does not match %s", v.want)
+	switch {
+	case err == io.EOF && !v.verifier.Verified():
+		err = fmt.Errorf("upstream content does not match %s", v.want)
+	case err == nil || err == io.EOF:
+		return n, err
 	}
+	v.fail()
+	v.fail = func() {}
 	return n, err
 }
 

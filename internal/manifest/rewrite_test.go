@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -439,5 +440,52 @@ func TestRewrite_ReadFailureIsNotRetriedUnrewritten(t *testing.T) {
 	}
 	if n := f.downloads.Load(); n != 1 {
 		t.Errorf("%d downloads of a truncated archive, want 1", n)
+	}
+}
+
+// A source whose archive cannot be rewritten fails before EOF; it must move to
+// the back like a mismatching one, so the retry reaches the next source.
+func TestRewrite_FailedSourceIsTriedLast(t *testing.T) {
+	tgz := tarballOf(t, [][2]string{{"demo/Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")}})
+	var rewritten bytes.Buffer
+	if _, err := rewriteChart(&rewritten, bytes.NewReader(tgz), "proxy.example.com", log.New(io.Discard, "", 0)); err != nil {
+		t.Fatal(err)
+	}
+	m, base, _ := layerUpstream(t, map[string][]byte{"/a.tgz": []byte("not a gzip archive"), "/b.tgz": tgz})
+	d := holdLayer(m, "1.0.0", rewritten.Bytes(), false, base+"/a.tgz", base+"/b.tgz")
+	m.mu.Lock()
+	m.records[testRepo]["1.0.0"].layer.rewriteHost = "proxy.example.com"
+	m.mu.Unlock()
+	if _, err := readBlob(t, m, d); err == nil {
+		t.Fatal("first read of the broken source succeeded")
+	}
+	if got, err := readBlob(t, m, d); err != nil || !bytes.Equal(got, rewritten.Bytes()) {
+		t.Fatalf("retry was not served by the other source: %v", err)
+	}
+}
+
+// A client that disconnects mid-layer says nothing about the source.
+func TestStreamedLayer_ClientCancelKeepsSourceOrder(t *testing.T) {
+	f := newStreamFixture(t)
+	d := f.layer(t)
+	f.m.mu.Lock()
+	l := f.m.records[f.repo]["1.0.0"].layer
+	first := l.urls[0]
+	l.urls = append(l.urls, first+"?second")
+	f.m.mu.Unlock()
+	f.delay.Store(int64(300 * time.Millisecond))
+	ctx, cancel := context.WithCancel(t.Context())
+	b, _ := f.m.findBlob(f.repo, d)
+	rc, err := f.m.openBlob(ctx, f.repo, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if _, err := io.ReadAll(rc); err == nil {
+		t.Fatal("read survived the cancelled request")
+	}
+	if b, _ := f.m.findBlob(f.repo, d); b.urls[0] != first {
+		t.Errorf("source order %v after a client cancel, want %s first", b.urls, first)
 	}
 }
