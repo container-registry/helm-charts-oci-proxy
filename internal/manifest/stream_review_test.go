@@ -335,3 +335,29 @@ func TestRouting_PrefixedPathMatchesPlain(t *testing.T) {
 }
 
 func handle(f func(http.ResponseWriter, *http.Request) error) registry.Handler { return f }
+
+// /v2/v2/... leaves no repository between the last "v2" and the kind. Main
+// answered such manifests 500 and blobs 404; nothing is looked up under "".
+func TestHandlers_EmptyRepositoryIsNeverLookedUp(t *testing.T) {
+	m := newTestManifests(t, Config{})
+	data := []byte("config")
+	d := digest.FromBytes(data)
+	m.insert("", &record{manifest: []byte("{}"), digest: "sha256:x", config: &blob{digest: d, size: int64(len(data)), data: data}, expires: time.Now().Add(time.Hour)}, "1.0")
+	for _, tc := range []struct {
+		path string
+		h    func(http.ResponseWriter, *http.Request) error
+		want int
+	}{
+		{"/v2/v2/manifests/1.0", m.Handle, http.StatusInternalServerError},
+		{"/v2/charts/v2/manifests/1.0", m.Handle, http.StatusInternalServerError},
+		{"/v2/v2/blobs/" + d.String(), m.HandleBlobs, http.StatusNotFound},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			err := tc.h(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), method, tc.path, nil))
+			var re *errors.RegError
+			if !stderrors.As(err, &re) || re.Status != tc.want {
+				t.Errorf("%s %s: got %v, want %d", method, tc.path, err, tc.want)
+			}
+		}
+	}
+}

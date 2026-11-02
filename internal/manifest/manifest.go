@@ -87,6 +87,11 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 			Message: "No chart name specified",
 		}
 	}
+	// A chart is <index path>/<chart>; main answered every other shape with
+	// this error from prepareChart.
+	if !strings.Contains(repo, "/") {
+		return errors.RegErrInternal(fmt.Errorf("invalid repo length"))
+	}
 	// Cached manifests are keyed by the index version, so the tag form is
 	// normalised once here and never looked up again.
 	target := ManifestTarget(ref)

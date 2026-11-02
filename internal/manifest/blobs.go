@@ -49,6 +49,9 @@ func (m *Manifests) HandleBlobs(resp http.ResponseWriter, req *http.Request) err
 			Message: "invalid digest",
 		}
 	}
+	if repo == "" {
+		return regErrBlobUnknown
+	}
 	b, ok := m.findBlob(repo, d)
 	if !ok {
 		return regErrBlobUnknown
