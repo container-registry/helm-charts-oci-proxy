@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/v2.0.0...v2.0.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **manifest:** resolve a tag to the index version it names exactly ([#117](https://github.com/container-registry/helm-charts-oci-proxy/issues/117)) ([76bc511](https://github.com/container-registry/helm-charts-oci-proxy/commit/76bc511daae95e20ea3618a99f2c0de8eed4f820))
+
+
+### Code Refactoring
+
+* keep one record per chart version and drop the blob store ([#119](https://github.com/container-registry/helm-charts-oci-proxy/issues/119)) ([70bfe20](https://github.com/container-registry/helm-charts-oci-proxy/commit/70bfe20a0c2312a1a228c556d94e8c702a7d25d4))
+
 ## [2.0.0](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.2.2...v2.0.0) (2026-11-02)
 
 
