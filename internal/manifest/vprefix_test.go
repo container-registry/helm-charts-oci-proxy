@@ -83,34 +83,48 @@ func listedTags(t *testing.T, m *Manifests, repo string) []string {
 // reach its own chart whichever is requested first, and tags/list must offer
 // both once, also when the index repeats an entry.
 func TestHandle_VPrefixedAndPlainVersionsAreDistinct(t *testing.T) {
-	m, repo, want, _ := versionsServer(t, "1.21.1", "v1.21.1", "1.21.1")
-	for _, tag := range []string{"v1.21.1", "1.21.1", "v1.21.1", "1.21.1"} {
-		if got := layerDigest(t, m, repo, tag); got != want[tag] {
-			t.Errorf("tag %s: layer %s, want %s", tag, got, want[tag])
-		}
-	}
-	if got := listedTags(t, m, repo); !slices.Equal(got, []string{"1.21.1", "v1.21.1"}) {
-		t.Errorf("tags/list = %v, want [1.21.1 v1.21.1]", got)
+	for _, order := range [][]string{
+		{"v1.21.1", "1.21.1", "v1.21.1", "1.21.1"},
+		{"1.21.1", "v1.21.1", "1.21.1", "v1.21.1"},
+	} {
+		t.Run(order[0]+"-first", func(t *testing.T) {
+			m, repo, want, _ := versionsServer(t, "1.21.1", "v1.21.1", "1.21.1")
+			for _, tag := range order {
+				if got := layerDigest(t, m, repo, tag); got != want[tag] {
+					t.Errorf("tag %s: layer %s, want %s", tag, got, want[tag])
+				}
+			}
+			if got := listedTags(t, m, repo); !slices.Equal(got, []string{"1.21.1", "v1.21.1"}) {
+				t.Errorf("tags/list = %v, want [1.21.1 v1.21.1]", got)
+			}
+		})
 	}
 }
 
 // Without a collision a tag still reaches the version with the leading "v"
 // added or removed, both spellings share one download, and tags/list keeps
 // the strict semver form helm 3 resolves "latest" and constraints from.
+// Exact-first reuses the cached manifest for the alias; alias-first stores the
+// alias while preparing the chart.
 func TestHandle_VPrefixFallbackSharesOneDownload(t *testing.T) {
-	m, repo, want, downloads := versionsServer(t, "v2.0.0", "1.0.0")
-	for _, tc := range []struct{ tag, version string }{
-		{"v2.0.0", "v2.0.0"}, {"2.0.0", "v2.0.0"},
-		{"1.0.0", "1.0.0"}, {"v1.0.0", "1.0.0"},
+	type req struct{ tag, version string }
+	for name, order := range map[string][]req{
+		"exact-first": {{"v2.0.0", "v2.0.0"}, {"2.0.0", "v2.0.0"}, {"1.0.0", "1.0.0"}, {"v1.0.0", "1.0.0"}},
+		"alias-first": {{"2.0.0", "v2.0.0"}, {"v2.0.0", "v2.0.0"}, {"v1.0.0", "1.0.0"}, {"1.0.0", "1.0.0"}},
 	} {
-		if got := layerDigest(t, m, repo, tc.tag); got != want[tc.version] {
-			t.Errorf("tag %s: layer %s, want %s", tc.tag, got, want[tc.version])
-		}
-	}
-	if n := downloads.Load(); n != 2 {
-		t.Errorf("%d tarball downloads for 2 versions, want 2", n)
-	}
-	if got := listedTags(t, m, repo); !slices.Equal(got, []string{"1.0.0", "2.0.0"}) {
-		t.Errorf("tags/list = %v, want [1.0.0 2.0.0]", got)
+		t.Run(name, func(t *testing.T) {
+			m, repo, want, downloads := versionsServer(t, "v2.0.0", "1.0.0")
+			for _, tc := range order {
+				if got := layerDigest(t, m, repo, tc.tag); got != want[tc.version] {
+					t.Errorf("tag %s: layer %s, want %s", tc.tag, got, want[tc.version])
+				}
+			}
+			if n := downloads.Load(); n != 2 {
+				t.Errorf("%d tarball downloads for 2 versions, want 2", n)
+			}
+			if got := listedTags(t, m, repo); !slices.Equal(got, []string{"1.0.0", "2.0.0"}) {
+				t.Errorf("tags/list = %v, want [1.0.0 2.0.0]", got)
+			}
+		})
 	}
 }
