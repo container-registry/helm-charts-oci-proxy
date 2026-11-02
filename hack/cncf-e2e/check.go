@@ -225,6 +225,8 @@ func (k *checker) viaProxy(r *Result, up *upstream) (*Evidence, error) {
 	name := up.repoPath + "/" + up.cv.Name
 	tag := strings.ReplaceAll(up.cv.Version, "+", "_")
 	base := k.proxy.String() + "/v2/" + name
+	// Digests describe this attempt only; a retry must not report the last one's.
+	r.ManifestDigest, r.LayerDigest = "", ""
 
 	body, pe, err := k.proxyGet("manifest", base+"/manifests/"+tag, ocispec.MediaTypeImageManifest, 4<<20)
 	if err != nil {
