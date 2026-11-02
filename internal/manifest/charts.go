@@ -188,7 +188,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	proxyHost := m.config.ProxyHost
 	// Dependency rewriting changes the tarball, so only that path buffers it.
 	if !m.config.RewriteDependencies || proxyHost == "" {
-		return m.prepareStreamed(ctx, path, chartVer, downloadUrl, reference)
+		return m.prepareStreamed(ctx, repo, chartVer, downloadUrl, reference)
 	}
 
 	manifestData, err := m.download(ctx, downloadUrl)
@@ -225,7 +225,7 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 
 	layer := layerDescriptor(downloadUrl, digest.FromBytes(manifestData), int64(len(manifestData)))
-	return m.storeChart(ctx, path, chartVer, reference, chartMeta, layer, manifestData, "")
+	return m.storeChart(repo, chartVer, reference, chartMeta, layer, manifestData, "")
 }
 
 func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {

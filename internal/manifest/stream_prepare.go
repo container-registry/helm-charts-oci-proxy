@@ -45,7 +45,7 @@ func layerDescriptor(downloadURL string, d digest.Digest, size int64) ocispec.De
 // streamed read of its tarball: the bytes are hashed and counted as they pass,
 // the chart is validated on the way, and only the config blob and the manifest
 // are kept. The layer is served later by streaming it from the upstream again.
-func (m *Manifests) prepareStreamed(ctx context.Context, path string, chartVer *repo.ChartVersion, downloadURL, reference string) *errors.RegError {
+func (m *Manifests) prepareStreamed(ctx context.Context, repoKey string, chartVer *repo.ChartVersion, downloadURL, reference string) *errors.RegError {
 	body, err := m.openUpstream(ctx, downloadURL)
 	if err != nil {
 		return downloadError(err, "MANIFEST_UNKNOWN")
@@ -83,5 +83,5 @@ func (m *Manifests) prepareStreamed(ctx context.Context, path string, chartVer *
 	m.checkIndexDigest(chartVer, layerHex)
 
 	layer := layerDescriptor(downloadURL, digest.NewDigestFromEncoded(digest.SHA256, layerHex), counter.n)
-	return m.storeChart(ctx, path, chartVer, reference, chartMeta, layer, nil, downloadURL)
+	return m.storeChart(repoKey, chartVer, reference, chartMeta, layer, nil, downloadURL)
 }

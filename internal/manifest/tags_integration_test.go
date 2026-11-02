@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
 )
 
 type mapCache struct {
@@ -39,7 +37,7 @@ func (c *mapCache) Get(key interface{}) (interface{}, bool) {
 //
 // Run with: go test ./internal/manifest/ -tags integration -run TestHandleTags
 func TestHandleTags_PrereleaseOnlyChart_Integration(t *testing.T) {
-	m := NewManifests(context.Background(), mem.NewMemHandler(), Config{
+	m := NewManifests(context.Background(), Config{
 		CacheTTL:           time.Minute,
 		IndexCacheTTL:      time.Minute,
 		IndexErrorCacheTTL: time.Second,

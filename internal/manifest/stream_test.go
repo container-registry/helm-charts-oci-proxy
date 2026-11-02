@@ -2,23 +2,16 @@ package manifest
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
-	"expvar"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/opencontainers/go-digest"
 )
 
 type streamFixture struct {
@@ -57,7 +50,7 @@ func newStreamFixture(t *testing.T) *streamFixture {
 	})
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
-	f.m = NewManifests(t.Context(), mem.NewMemHandler(), Config{}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	f.m = newTestManifests(t, Config{})
 	f.m.httpClient = srv.Client()
 	f.m.layerClient = newLayerClient(srv.Client())
 	f.repo = strings.TrimPrefix(srv.URL, "https://") + "/demo"
@@ -72,6 +65,27 @@ func (f *streamFixture) manifest(t *testing.T, query string) (digest string, bod
 		t.Fatalf("manifest: %v", err)
 	}
 	return rec.Header().Get("Docker-Content-Digest"), rec.Body.Bytes()
+}
+
+// blob answers a blob request for d in the fixture's repository.
+func (f *streamFixture) blob(t *testing.T, method string, d digest.Digest) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), method, "/v2/"+f.repo+"/blobs/"+d.String(), nil)
+	if err := f.m.HandleBlobs(rec, req); err != nil {
+		t.Fatalf("%s blob %s: %v", method, d, err)
+	}
+	return rec
+}
+
+// open returns blob d as a blob GET streams it to the client.
+func (f *streamFixture) open(t *testing.T, d digest.Digest) (io.ReadCloser, error) {
+	t.Helper()
+	b, ok := f.m.findBlob(f.repo, d)
+	if !ok {
+		t.Fatalf("blob %s is not held for %s", d, f.repo)
+	}
+	return f.m.openBlob(t.Context(), f.repo, b)
 }
 
 // The streamed path must produce the same manifest bytes as the buffered
@@ -94,34 +108,15 @@ func TestStreamedManifestMatchesBuffered(t *testing.T) {
 // it from the upstream and verifies it against the manifest's digest.
 func TestLayerIsStreamedNotStored(t *testing.T) {
 	f := newStreamFixture(t)
-	before := storedBlobBytes(t, f.m)
-	_, body := f.manifest(t, "")
-	var man ocispec.Manifest
-	if err := json.Unmarshal(body, &man); err != nil {
-		t.Fatal(err)
+	d := f.layer(t)
+	if b, _ := f.m.findBlob(f.repo, d); b.data != nil {
+		t.Errorf("the tarball (%d bytes) is held in memory", len(b.data))
 	}
-	if grown := storedBlobBytes(t, f.m) - before; grown >= int64(len(f.tgz)) {
-		t.Errorf("blob store grew by %d bytes, the tarball (%d bytes) is held in memory", grown, len(f.tgz))
+	if got := f.blob(t, http.MethodHead, d).Header().Get("Content-Length"); got != fmt.Sprint(len(f.tgz)) {
+		t.Fatalf("HEAD Content-Length = %s; want %d", got, len(f.tgz))
 	}
-
-	h, err := v1.NewHash(man.Layers[0].Digest.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	size, err := f.m.Blobs().(interface {
-		Stat(context.Context, string, v1.Hash) (int64, error)
-	}).Stat(t.Context(), "", h)
-	if err != nil || size != int64(len(f.tgz)) {
-		t.Fatalf("Stat = %d, %v; want %d", size, err, len(f.tgz))
-	}
-	rc, err := f.m.Blobs().Get(t.Context(), "", h)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := io.ReadAll(rc)
-	rc.Close()
-	if err != nil || !bytes.Equal(got, f.tgz) {
-		t.Fatalf("layer read: %v, equal=%v", err, bytes.Equal(got, f.tgz))
+	if got := f.blob(t, http.MethodGet, d).Body.Bytes(); !bytes.Equal(got, f.tgz) {
+		t.Fatalf("layer GET returned %d bytes that are not the tarball", len(got))
 	}
 	if n := f.downloads.Load(); n != 2 {
 		t.Errorf("%d upstream downloads, want 2 (manifest, then layer)", n)
@@ -132,14 +127,9 @@ func TestLayerIsStreamedNotStored(t *testing.T) {
 // as the layer the manifest describes.
 func TestStreamedLayerRejectsChangedUpstream(t *testing.T) {
 	f := newStreamFixture(t)
-	_, body := f.manifest(t, "")
-	var man ocispec.Manifest
-	if err := json.Unmarshal(body, &man); err != nil {
-		t.Fatal(err)
-	}
+	d := f.layer(t)
 	f.serve.Store(chartTarball(t, "demo", "1.0.1"))
-	h, _ := v1.NewHash(man.Layers[0].Digest.String())
-	rc, err := f.m.Blobs().Get(t.Context(), "", h)
+	rc, err := f.open(t, d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,15 +137,4 @@ func TestStreamedLayerRejectsChangedUpstream(t *testing.T) {
 	if _, err := io.ReadAll(rc); err == nil {
 		t.Fatal("changed upstream content was served without a verification error")
 	}
-}
-
-// storedBlobBytes reads the in-memory blob store size published by the mem
-// handler.
-func storedBlobBytes(t *testing.T, _ *Manifests) int64 {
-	t.Helper()
-	v, ok := expvar.Get("blob_store_bytes").(*expvar.Int)
-	if !ok {
-		t.Fatal("blob_store_bytes expvar not published")
-	}
-	return v.Value()
 }

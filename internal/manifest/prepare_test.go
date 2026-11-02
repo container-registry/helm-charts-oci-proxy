@@ -1,9 +1,7 @@
 package manifest
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -14,8 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler/mem"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/opencontainers/go-digest"
 )
 
 type syncMapCache struct {
@@ -61,7 +58,7 @@ entries:
 	mux.HandleFunc("/demo-2.0.0.tgz", tgz)
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexErrorCacheTTL: time.Minute}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), Config{IndexErrorCacheTTL: time.Minute}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	return m, strings.TrimPrefix(srv.URL, "https://") + "/demo"
 }
@@ -230,32 +227,31 @@ func TestPrepare_PanicFailsTheRequestOnly(t *testing.T) {
 	}
 }
 
-// The digest and tag entries of a chart reference the same blobs; expiring one
-// of them must not delete blobs the other still serves.
+// Versions of a repository that publish the same tarball share its layer;
+// expiring one of them must not stop serving the layer for the other.
 func TestCleanup_KeepsBlobsOfLiveManifests(t *testing.T) {
-	blobs := mem.NewMemHandler()
-	m := NewManifests(t.Context(), blobs, Config{CacheTTL: time.Minute}, nopCache{}, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := newTestManifests(t, Config{CacheTTL: time.Minute})
 	data := []byte("chart layer")
-	h, _, err := v1.SHA256(bytes.NewReader(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := blobs.Put(t.Context(), "", h, io.NopCloser(bytes.NewReader(data))); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-2 * time.Minute)
-	_ = m.Write("r/demo", "sha256:abc", Manifest{Refs: []string{h.String()}, CreatedAt: old})
-	_ = m.Write("r/demo", "1.0.0", Manifest{Refs: []string{h.String()}, CreatedAt: time.Now()})
+	d := digest.FromBytes(data)
+	layer := func() *blob { return &blob{digest: d, size: int64(len(data)), urls: []string{"https://u/x.tgz"}} }
+	old := time.Now().Add(-time.Second)
+	m.insert("r/demo", &record{layer: layer(), expires: old}, "sha256:abc", "1.0.0")
+	m.insert("r/demo", &record{layer: layer(), expires: time.Now().Add(time.Minute)}, "sha256:def", "1.0.1")
 
-	m.cleanup(t.Context())
-	if _, err := blobs.Stat(t.Context(), "", h); err != nil {
-		t.Fatalf("blob of a live manifest was deleted: %v", err)
+	m.cleanup()
+	if _, ok := m.findBlob("r/demo", d); !ok {
+		t.Fatal("layer of a live manifest is no longer served")
+	}
+	if names := m.names("r/demo"); len(names) != 2 {
+		t.Errorf("names after the first cleanup = %v, want the live version's two keys", names)
 	}
 
-	_ = m.Write("r/demo", "1.0.0", Manifest{Refs: []string{h.String()}, CreatedAt: old})
-	m.cleanup(t.Context())
-	if _, err := blobs.Stat(t.Context(), "", h); err == nil {
-		t.Error("blob still stored after every manifest referencing it expired")
+	m.mu.Lock()
+	m.records["r/demo"]["1.0.1"].expires = old
+	m.mu.Unlock()
+	m.cleanup()
+	if _, ok := m.findBlob("r/demo", d); ok {
+		t.Error("layer still served after every manifest referencing it expired")
 	}
 	if names := m.names("r/demo"); len(names) != 0 {
 		t.Errorf("expired manifests still listed: %v", names)

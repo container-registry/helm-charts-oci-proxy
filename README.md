@@ -193,7 +193,7 @@ A variable that is set but empty is treated as unset. An invalid value stops the
 * `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Applies to every request. Requires `PROXY_HOST`; the proxy refuses to start without it. Default is `false`.
 * `PROXY_HOST` - the proxy host used in rewritten dependency URLs, as a bare `host[:port]` such as `chartproxy.example.com`, without scheme, path or trailing slash. Required when `REWRITE_DEPENDENCIES` is `true`.
 * `ALLOW_PRIVATE_NETWORKS` - allow upstream downloads from private, loopback, and link-local addresses. Off by default as an SSRF guard; enable only when proxying chart repositories on an internal network. Default is `false`.
-* `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, in-memory blob store size). Unset by default, which disables the listener. Never expose it through the public ingress.
+* `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, layers streamed). Unset by default, which disables the listener. Never expose it through the public ingress.
 
 ### Dependency URL Rewriting
 
