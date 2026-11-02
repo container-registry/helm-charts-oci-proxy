@@ -33,8 +33,9 @@ type Manifests struct {
 	// repo -> chart version or manifest digest -> record; both keys of a
 	// prepared chart version share one record.
 	records     map[string]map[string]*record
-	size        int          // keys in records
-	mu          sync.RWMutex // guards records and size; never held during network I/O
+	failures    int          // keys in records that hold a failure
+	nextExpire  time.Time    // earliest time insert may scan for expired records
+	mu          sync.RWMutex // guards records, failures and nextExpire; never held during network I/O
 	prepares    singleflight.Group
 	indexes     singleflight.Group
 	slots       chan struct{}

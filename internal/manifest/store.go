@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"expvar"
 	"slices"
 	"time"
 
@@ -34,9 +35,15 @@ type blob struct {
 	rewriteHost string
 }
 
-// maxRecords bounds the keys of all records. A failure that does not fit is not
-// cached; a manifest always is, because its blobs are served from the record.
-const maxRecords = 16384
+// maxFailures bounds the keys that hold a failure. A failure that does not fit
+// is not cached; a manifest always is, because its blobs are served from it.
+const maxFailures = 16384
+
+// expireInterval spaces the scans insert runs while failures are at the bound,
+// so a sweep of missing versions does not scan every record on each insert.
+const expireInterval = time.Second
+
+var recordExpireScans = expvar.NewInt("record_expire_scans")
 
 func (m *Manifests) lookup(repo, ref string) *record {
 	m.mu.RLock()
@@ -51,9 +58,12 @@ func (m *Manifests) lookup(repo, ref string) *record {
 func (m *Manifests) insert(repo string, r *record, refs ...string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.size+len(refs) > maxRecords {
-		m.expire(time.Now())
-		if r.err != nil && m.size+len(refs) > maxRecords {
+	if r.err != nil && m.failures+len(refs) > maxFailures {
+		if now := time.Now(); now.After(m.nextExpire) {
+			m.nextExpire = now.Add(expireInterval)
+			m.expire(now)
+		}
+		if m.failures+len(refs) > maxFailures {
 			return
 		}
 	}
@@ -76,8 +86,12 @@ func (m *Manifests) insert(repo string, r *record, refs ...string) {
 		}
 	}
 	for _, ref := range refs {
-		if _, ok := entries[ref]; !ok {
-			m.size++
+		old := entries[ref]
+		if old != nil && old.err != nil {
+			m.failures--
+		}
+		if r.err != nil {
+			m.failures++
 		}
 		entries[ref] = r
 	}
@@ -93,11 +107,14 @@ func (m *Manifests) fail(repo, ref string, err *errors.RegError) {
 
 // expire drops the records that expired before now. m.mu must be held.
 func (m *Manifests) expire(now time.Time) {
+	recordExpireScans.Add(1)
 	for repo, entries := range m.records {
 		for ref, r := range entries {
 			if now.After(r.expires) {
 				delete(entries, ref)
-				m.size--
+				if r.err != nil {
+					m.failures--
+				}
 			}
 		}
 		if len(entries) == 0 {

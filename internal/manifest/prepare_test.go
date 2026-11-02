@@ -257,3 +257,24 @@ func TestCleanup_KeepsBlobsOfLiveManifests(t *testing.T) {
 		t.Errorf("expired manifests still listed: %v", names)
 	}
 }
+
+// A sweep of missing versions with the failure cache full must not scan every
+// record on each insert, and a manifest insert never scans.
+func TestStore_ExpiryScanIsAmortised(t *testing.T) {
+	m := newTestManifests(t, Config{IndexErrorCacheTTL: time.Hour})
+	for i := range maxFailures {
+		m.fail("r/demo", fmt.Sprint("f", i), resultNotFound("r/demo", "x"))
+	}
+	before := recordExpireScans.Value()
+	start := time.Now()
+	for i := range 1000 {
+		m.fail("r/demo", fmt.Sprint("g", i), resultNotFound("r/demo", "x"))
+		m.insert("r/demo", &record{expires: time.Now().Add(time.Hour)}, fmt.Sprint("v", i))
+	}
+	if limit := 1 + int64(time.Since(start)/expireInterval); recordExpireScans.Value()-before > limit {
+		t.Errorf("%d expiry scans for 2000 inserts, want at most %d", recordExpireScans.Value()-before, limit)
+	}
+	if m.failures > maxFailures {
+		t.Errorf("%d failures cached, bound is %d", m.failures, maxFailures)
+	}
+}
