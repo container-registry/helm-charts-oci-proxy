@@ -87,11 +87,13 @@ unless set explicitly. An empty SHUTDOWN_TIMEOUT selects the proxy default 25.
 {{- end }}
 {{- $drain := int (default 25 .Values.app.env_vars.SHUTDOWN_TIMEOUT) }}
 {{- $needed := add $preStop $drain }}
-{{- with .Values.shutdown.terminationGracePeriodSeconds }}
-{{- if lt (int .) $needed }}
-{{- fail (printf "shutdown.terminationGracePeriodSeconds (%d) must be at least shutdown.preStopSleepSeconds + app.env_vars.SHUTDOWN_TIMEOUT (%d)" (int .) $needed) }}
+{{- $grace := .Values.shutdown.terminationGracePeriodSeconds }}
+{{- /* not with: it treats an explicit 0 as unset and skips the check */}}
+{{- if not (kindIs "invalid" $grace) }}
+{{- if lt (int $grace) $needed }}
+{{- fail (printf "shutdown.terminationGracePeriodSeconds (%d) must be at least shutdown.preStopSleepSeconds + app.env_vars.SHUTDOWN_TIMEOUT (%d)" (int $grace) $needed) }}
 {{- end }}
-{{- int . }}
+{{- int $grace }}
 {{- else }}
 {{- add $needed 5 }}
 {{- end }}

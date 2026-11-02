@@ -94,3 +94,10 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "shutdown.preStopSleepSeconds must not be negative"
+
+  - it: should reject an explicit grace period of 0
+    set:
+      shutdown.terminationGracePeriodSeconds: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "shutdown.terminationGracePeriodSeconds \\(0\\) must be at least"
