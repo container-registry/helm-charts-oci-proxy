@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -464,9 +465,10 @@ func (e *tooLargeError) Error() string {
 // retryBackoff is a variable so tests do not wait.
 var retryBackoff = 5 * time.Second
 
-// transient reports whether repeating the request can succeed: network
-// failures and 408, 429 or 5xx answers. Policy refusals, other 4xx and an
-// oversized body give the same result again.
+// transient reports whether repeating the request can succeed: timeouts,
+// connection and read failures, temporary DNS errors and 408, 429 or 5xx
+// answers. Everything else, such as policy refusals, other 4xx, an oversized
+// body or too many redirects, gives the same result again.
 func transient(err error) bool {
 	if err == nil || isPolicyError(err) {
 		return false
@@ -479,7 +481,19 @@ func transient(err error) bool {
 	if errors.As(err, &se) {
 		return se.status == http.StatusRequestTimeout || se.status == http.StatusTooManyRequests || se.status >= 500
 	}
-	return true
+	// *url.Error implements net.Error for every client error, so only its
+	// Timeout answer counts, not the type.
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	// A DNS error sits inside a *net.OpError; NXDOMAIN does not go away.
+	var de *net.DNSError
+	if errors.As(err, &de) {
+		return de.IsTimeout || de.IsTemporary
+	}
+	var oe *net.OpError
+	return errors.As(err, &oe) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // getRetry repeats a GET once after a transient failure.
