@@ -77,12 +77,3 @@ func TestIndexCacheAdmitsOversizedIndex(t *testing.T) {
 		t.Error("index larger than the budget was not admitted")
 	}
 }
-
-func TestNewIndexCacheRejectsInvalidSize(t *testing.T) {
-	for _, mib := range []int{0, -1, maxIndexCacheMiB + 1} {
-		if c, err := newIndexCache(mib, false); err == nil {
-			c.Close()
-			t.Errorf("size %d MiB accepted", mib)
-		}
-	}
-}

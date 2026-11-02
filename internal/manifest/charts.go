@@ -134,7 +134,7 @@ func ChartURL(indexPath string, cv *repo.ChartVersion) (*url.URL, error) {
 	return url.Parse(resolved)
 }
 
-func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string, rewriteOpts RewriteOptions) *errors.RegError {
+func (m *Manifests) prepareChart(ctx context.Context, repo string, reference string) *errors.RegError {
 	elem := strings.Split(repo, "/")
 
 	if len(elem) < 2 {
@@ -185,8 +185,9 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 	}
 	downloadUrl := u.String()
 
+	proxyHost := m.config.ProxyHost
 	// Dependency rewriting changes the tarball, so only that path buffers it.
-	if !rewriteOpts.Enabled || rewriteOpts.ProxyHost == "" {
+	if !m.config.RewriteDependencies || proxyHost == "" {
 		return m.prepareStreamed(ctx, path, chartVer, downloadUrl, reference)
 	}
 
@@ -208,19 +209,17 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return upstreamError("upstream %s did not return a valid chart archive: %v", downloadUrl, err)
 	}
 
-	if rewriteOpts.Enabled && rewriteOpts.ProxyHost != "" {
-		rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, rewriteOpts.ProxyHost, m.log)
-		if rewriteErr != nil {
-			m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
-		} else if result.Modified {
-			// The config must describe the archive that is served.
-			if meta, err := extractChartMeta(rewrittenData); err != nil {
-				m.log.Printf("warning: rewritten chart is unreadable, serving the original: %v", err)
-			} else {
-				manifestData, chartMeta = rewrittenData, meta
-				if m.config.Debug {
-					m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
-				}
+	rewrittenData, result, rewriteErr := rewriteChartDependencies(manifestData, proxyHost, m.log)
+	if rewriteErr != nil {
+		m.log.Printf("warning: failed to rewrite dependencies: %v", rewriteErr)
+	} else if result.Modified {
+		// The config must describe the archive that is served.
+		if meta, err := extractChartMeta(rewrittenData); err != nil {
+			m.log.Printf("warning: rewritten chart is unreadable, serving the original: %v", err)
+		} else {
+			manifestData, chartMeta = rewrittenData, meta
+			if m.config.Debug {
+				m.log.Printf("rewrote %d dependencies in chart", len(result.Dependencies))
 			}
 		}
 	}
@@ -253,9 +252,13 @@ func (m *Manifests) GetIndex(repoURLPath string) (*repo.IndexFile, error) {
 			ttl := m.config.IndexCacheTTL
 			if res.err != nil {
 				// cache error too to avoid external resource exhausting
-				ttl = m.config.IndexErrorCacheTTl
+				ttl = m.config.IndexErrorCacheTTL
 			}
-			m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+			// ristretto keeps an entry with TTL 0 forever; for errors 0 means
+			// do not cache.
+			if res.err == nil || ttl > 0 {
+				m.cache.SetWithTTL(repoURLPath, res, IndexCost(size, res.err, m.config.IndexCacheMaxCost), ttl)
+			}
 			// ristretto applies writes asynchronously; without waiting, a request
 			// right after this flight ends would miss and parse the index again.
 			if w, ok := m.cache.(interface{ Wait() }); ok {

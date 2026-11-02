@@ -76,14 +76,15 @@ func (f *streamFixture) manifest(t *testing.T, query string) (digest string, bod
 
 // The streamed path must produce the same manifest bytes as the buffered
 // path; a changed digest would make every client see every chart as new.
-// rewrite_dependencies=true forces the buffered path; the test chart has no
+// Dependency rewriting forces the buffered path; the test chart has no
 // dependencies, so the tarball is served unchanged there.
 func TestStreamedManifestMatchesBuffered(t *testing.T) {
 	streamed := newStreamFixture(t)
 	sd, sb := streamed.manifest(t, "")
 	buffered := newStreamFixture(t)
+	buffered.m.config.RewriteDependencies = true
 	buffered.m.config.ProxyHost = "proxy.example.com"
-	bd, bb := buffered.manifest(t, "?rewrite_dependencies=true")
+	bd, bb := buffered.manifest(t, "")
 	if sd != bd || !bytes.Equal(sb, bb) {
 		t.Fatalf("streamed manifest %s differs from buffered %s\nstreamed: %s\nbuffered: %s", sd, bd, sb, bb)
 	}

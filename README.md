@@ -177,18 +177,21 @@ helm pull --plain-http oci://localhost:9000/charts.jetstack.io/cert-manager-isti
 
 There are not many options in configure the application except the following.
 
-* `PORT` - specifies port, default `9000`
+A variable that is set but empty is treated as unset. An invalid value stops the start.
+
+* `PORT` - specifies port, `1` to `65535`, default `9000`
 * `DEBUG` - enables debug logging for any truthy value (`true`, `1`), default `false`
-* `MANIFEST_CACHE_TTL` - for how long we have stores manifest and its related blobs, the default value is `60` seconds.
-* `INDEX_CACHE_TTL` - for how long we store chart index file content, the default value is `14400` seconds (4h)
+* `MANIFEST_CACHE_TTL` - for how long we have stores manifest and its related blobs, the default value is `60` seconds. Must be at least `1`.
+* `INDEX_CACHE_TTL` - for how long we store chart index file content, the default value is `14400` seconds (4h). Must be at least `1`.
 * `INDEX_CACHE_SIZE_MIB` - size budget in MiB for cached index files. A parsed index is charged twice its YAML size, and one larger than the budget is charged the whole budget; the largest public index (bitnami, 27.5MB) takes about 55MiB. Indexes still in use by in-flight requests or being parsed are outside the budget, so it is not a hard memory limit. Default `128`, valid from 1 to 1048576.
-* `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. Also how long a chart version that does not exist upstream (404 or 410), or that the proxy refuses to fetch (403, e.g. a non-https URL), is answered from memory. Other upstream failures are retried on the next request. The default value is `30` seconds.
+* `INDEX_ERROR_CACHE_TTL` - for how long we do not try to obtain index files again if it's failed for some reason. Also how long a chart version that does not exist upstream (404 or 410), or that the proxy refuses to fetch (403, e.g. a non-https URL), is answered from memory. Other upstream failures are retried on the next request. `0` disables this caching, so every request retries the upstream. The default value is `30` seconds.
 * `PREPARE_CONCURRENCY` - how many chart versions are downloaded and converted at once. Each holds an upstream connection, and with dependency rewriting the whole tarball, while it runs. Requests for one version share one preparation. Default `4`.
 * `USE_TLS` - enabled HTTP over TLS
 * `CERT_FILE` - TLS certificate path when `USE_TLS` is set, default `certs/registry.pem`
 * `KEY_FILE` - TLS private key path when `USE_TLS` is set, default `certs/registry-key.pem`
-* `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Default is `false`.
-* `PROXY_HOST` - override the proxy host used in rewritten dependency URLs. If not set, uses the Host header from incoming requests.
+* `SHUTDOWN_TIMEOUT` - seconds to let in-flight requests finish after SIGTERM or SIGINT before the server closes them. Requests still running then are cut off and the process exits normally. Keep it below the pod's `terminationGracePeriodSeconds` (Kubernetes default 30). Default `25`.
+* `REWRITE_DEPENDENCIES` - rewrites chart dependency repository URLs to point through the proxy. When enabled, dependencies like `https://charts.bitnami.com/bitnami` become `oci://<proxy-host>/charts.bitnami.com/bitnami`. Applies to every request. Requires `PROXY_HOST`; the proxy refuses to start without it. Default is `false`.
+* `PROXY_HOST` - the proxy host used in rewritten dependency URLs, as a bare `host[:port]` such as `chartproxy.example.com`, without scheme, path or trailing slash. Required when `REWRITE_DEPENDENCIES` is `true`.
 * `ALLOW_PRIVATE_NETWORKS` - allow upstream downloads from private, loopback, and link-local addresses. Off by default as an SSRF guard; enable only when proxying chart repositories on an internal network. Default is `false`.
 * `DIAG_ADDR` - address (e.g. `127.0.0.1:9001`) for a separate diagnostics listener serving `/debug/pprof/` and `/debug/vars` (expvar: Go memstats, index cache metrics, index parses, charts prepared, in-memory blob store size). Unset by default, which disables the listener. Never expose it through the public ingress.
 
@@ -210,18 +213,8 @@ dependencies:
     repository: oci://chartproxy.container-registry.com/charts.bitnami.com/bitnami
 ```
 
-The `rewrite_dependencies` query parameter overrides the setting per request. Helm does not accept query
-strings in OCI references, so this only works for clients that speak the registry API directly:
-
-```bash
-# Enable rewriting for this manifest request
-curl -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-  "https://chartproxy.example.com/v2/charts.bitnami.com/bitnami/redis/manifests/1.0.0?rewrite_dependencies=true"
-
-# Disable rewriting for this manifest request
-curl -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-  "https://chartproxy.example.com/v2/charts.jetstack.io/cert-manager/manifests/1.11.2?rewrite_dependencies=false"
-```
+Rewriting is a process-wide setting. Prepared charts are cached and served to every client, so a request
+cannot switch rewriting on or off, and the request `Host` header is never used in rewritten URLs.
 
 The following URL types are NOT rewritten:
 - `file://` - local file dependencies

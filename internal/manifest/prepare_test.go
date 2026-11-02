@@ -61,7 +61,7 @@ entries:
 	mux.HandleFunc("/demo-2.0.0.tgz", tgz)
 	srv = httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
-	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexErrorCacheTTl: time.Minute}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
+	m := NewManifests(t.Context(), mem.NewMemHandler(), Config{IndexErrorCacheTTL: time.Minute}, cache, log.New(os.Stdout, "test-", log.LstdFlags))
 	m.httpClient = srv.Client()
 	return m, strings.TrimPrefix(srv.URL, "https://") + "/demo"
 }

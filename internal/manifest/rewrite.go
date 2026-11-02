@@ -13,12 +13,6 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// RewriteOptions holds options for dependency URL rewriting passed from HTTP handler
-type RewriteOptions struct {
-	Enabled   bool   // Final decision: query param overrides env var
-	ProxyHost string // From req.Host (or PROXY_HOST override)
-}
-
 // RewriteResult contains information about what was rewritten
 type RewriteResult struct {
 	Modified     bool

@@ -16,13 +16,11 @@ import (
 // version waits for it and the result is cached for all of them.
 const prepareTimeout = 2 * time.Minute
 
-const defaultPrepareConcurrency = 4
-
-func (m *Manifests) manifest(ctx context.Context, repo, target string, opts RewriteOptions) (Manifest, *errors.RegError) {
+func (m *Manifests) manifest(ctx context.Context, repo, target string) (Manifest, *errors.RegError) {
 	if ma, err := m.Read(repo, target); err == nil {
 		return ma, nil
 	}
-	if err := m.prepare(ctx, repo, target, opts); err != nil {
+	if err := m.prepare(ctx, repo, target); err != nil {
 		return Manifest{}, err
 	}
 	if ma, err := m.Read(repo, target); err == nil {
@@ -35,7 +33,7 @@ func (m *Manifests) manifest(ctx context.Context, repo, target string, opts Rewr
 // ask for it at the same time, and at most PrepareConcurrency at once because
 // each one holds an upstream connection and, when dependencies are rewritten,
 // the whole tarball.
-func (m *Manifests) prepare(ctx context.Context, repo, reference string, opts RewriteOptions) *errors.RegError {
+func (m *Manifests) prepare(ctx context.Context, repo, reference string) *errors.RegError {
 	key := repo + "\x00" + reference
 	if rerr := m.failures.get(key); rerr != nil {
 		return rerr
@@ -68,7 +66,7 @@ func (m *Manifests) prepare(ctx context.Context, repo, reference string, opts Re
 				Message: fmt.Sprintf("too many chart preparations in progress for %s %s", repo, reference),
 			}
 		}
-		rerr := m.prepareChart(workCtx, repo, reference, opts)
+		rerr := m.prepareChart(workCtx, repo, reference)
 		// A version constraint such as 1.0 is stored under the version it
 		// resolved to; without caching the 404, every request would repeat the
 		// download.
