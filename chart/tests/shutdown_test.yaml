@@ -87,3 +87,10 @@ tests:
           content:
             name: PROXY_HOST
             value: chartproxy.example.com
+
+  - it: should reject a negative preStop sleep
+    set:
+      shutdown.preStopSleepSeconds: -10
+    asserts:
+      - failedTemplate:
+          errorPattern: "shutdown.preStopSleepSeconds must not be negative"

@@ -82,6 +82,9 @@ unless set explicitly. An empty SHUTDOWN_TIMEOUT selects the proxy default 25.
 */}}
 {{- define "ocip.terminationGracePeriodSeconds" -}}
 {{- $preStop := int .Values.shutdown.preStopSleepSeconds }}
+{{- if lt $preStop 0 }}
+{{- fail (printf "shutdown.preStopSleepSeconds must not be negative, got %d" $preStop) }}
+{{- end }}
 {{- $drain := int (default 25 .Values.app.env_vars.SHUTDOWN_TIMEOUT) }}
 {{- $needed := add $preStop $drain }}
 {{- with .Values.shutdown.terminationGracePeriodSeconds }}
