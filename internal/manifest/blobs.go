@@ -3,17 +3,13 @@ package manifest
 import (
 	"bytes"
 	"context"
-	stderrors "errors"
 	"expvar"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
-	"sync"
 
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
-	"github.com/container-registry/helm-charts-oci-proxy/pkg/verify"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -29,7 +25,7 @@ var regErrBlobUnknown = &errors.RegError{
 // requested repository. A layer is streamed from its upstream and verified
 // against the manifest's digest, so tarballs are never held in memory.
 func (m *Manifests) HandleBlobs(resp http.ResponseWriter, req *http.Request) error {
-	repo, _, ref, ok := splitPath(strings.TrimSuffix(req.URL.Path, "/"))
+	repo, _, ref, ok := helper.SplitPath(req.URL.Path)
 	if !ok {
 		return &errors.RegError{
 			Status:  http.StatusBadRequest,
@@ -87,10 +83,6 @@ func (m *Manifests) openBlob(ctx context.Context, repo string, b blob) (io.ReadC
 	if b.data != nil {
 		return io.NopCloser(bytes.NewReader(b.data)), nil
 	}
-	h, err := v1.NewHash(b.digest.String())
-	if err != nil {
-		return nil, errors.RegErrInternal(err)
-	}
 	var lastErr error
 	for _, url := range b.urls {
 		body, err := m.openLayer(ctx, url)
@@ -102,31 +94,36 @@ func (m *Manifests) openBlob(ctx context.Context, repo string, b blob) (io.ReadC
 		if b.rewriteHost != "" {
 			body = rewriteStream(body, b.rewriteHost, m.log)
 		}
-		vrc, err := verify.ReadCloser(body, b.size, h)
-		if err != nil {
-			body.Close()
-			return nil, errors.RegErrInternal(err)
-		}
 		// A republished upstream file fails at EOF; HandleBlobs then drops the
 		// connection before the last byte instead of completing the body. The
 		// status is already sent by then, so the source moves to the back and
 		// the client's retry is served by the next one.
-		return &demoteOnMismatch{ReadCloser: vrc, demote: func() { m.demote(repo, b.digest, url) }}, nil
+		return verifyLayer(body, b, func() { m.demote(repo, b.digest, url) }), nil
 	}
 	return nil, downloadError(lastErr, "BLOB_UNKNOWN")
 }
 
-type demoteOnMismatch struct {
-	io.ReadCloser
-	demote func()
-	once   sync.Once
+// verifiedLayer reads at most the layer's size and fails at EOF unless the
+// bytes read match the layer's digest.
+type verifiedLayer struct {
+	io.Closer
+	r        io.Reader
+	verifier digest.Verifier
+	want     digest.Digest
+	mismatch func()
 }
 
-func (d *demoteOnMismatch) Read(p []byte) (int, error) {
-	n, err := d.ReadCloser.Read(p)
-	var ve verify.Error
-	if stderrors.As(err, &ve) {
-		d.once.Do(d.demote)
+func verifyLayer(body io.ReadCloser, b blob, mismatch func()) *verifiedLayer {
+	return &verifiedLayer{Closer: body, r: io.LimitReader(body, b.size), verifier: b.digest.Verifier(), want: b.digest, mismatch: mismatch}
+}
+
+func (v *verifiedLayer) Read(p []byte) (int, error) {
+	n, err := v.r.Read(p)
+	v.verifier.Write(p[:n])
+	if err == io.EOF && !v.verifier.Verified() {
+		v.mismatch()
+		v.mismatch = func() {}
+		return n, fmt.Errorf("upstream content does not match %s", v.want)
 	}
 	return n, err
 }

@@ -76,26 +76,10 @@ func NewManifests(ctx context.Context, config Config, cache Cache, log logrus.St
 	return ma
 }
 
-// splitPath splits /v2/<repo>/<kind>/<ref>. Manifests, tags and blobs share
-// it, so a blob is looked up under the same repository key as its manifest.
-func splitPath(p string) (repo, kind, ref string, ok bool) {
-	rest, found := strings.CutPrefix(p, "/v2/")
-	i := strings.LastIndexByte(rest, '/')
-	if !found || i < 0 {
-		return "", "", "", false
-	}
-	rest, ref = rest[:i], rest[i+1:]
-	i = strings.LastIndexByte(rest, '/')
-	if i < 0 {
-		return "", "", "", false
-	}
-	return rest[:i], rest[i+1:], ref, true
-}
-
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-an-image-manifest
 // https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-an-image
 func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
-	repo, _, ref, ok := splitPath(req.URL.Path)
+	repo, _, ref, ok := helper.SplitPath(req.URL.Path)
 	if !ok {
 		return &errors.RegError{
 			Status:  http.StatusBadRequest,
@@ -135,7 +119,7 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 }
 
 func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) error {
-	fullRepo, _, _, ok := splitPath(req.URL.Path)
+	fullRepo, _, _, ok := helper.SplitPath(req.URL.Path)
 	// /v2/tags/list has no repository, and a chart needs a repository path.
 	if !ok || !strings.Contains(fullRepo, "/") {
 		return &errors.RegError{

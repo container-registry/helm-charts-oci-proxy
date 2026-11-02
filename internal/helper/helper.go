@@ -14,62 +14,23 @@
 
 package helper
 
-import (
-	"net/http"
-	"strings"
-)
+import "strings"
 
-// Returns whether this url should be handled by the Blob handler
-// This is complicated because Blob is indicated by the trailing path, not the leading path.
-// https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pulling-a-layer
-// https://github.com/opencontainers/distribution-spec/blob/master/spec.md#pushing-a-layer
-func IsBlob(req *http.Request) bool {
-	elem := strings.Split(req.URL.Path, "/")
-	elem = elem[1:]
-	if elem[len(elem)-1] == "" {
-		elem = elem[:len(elem)-1]
+// SplitPath splits /v2/<repo>/<kind>/<ref>. Routing and the manifest, tag and
+// blob handlers share it, so a blob is looked up under the same repository
+// key as its manifest.
+func SplitPath(p string) (repo, kind, ref string, ok bool) {
+	rest, found := strings.CutPrefix(p, "/v2/")
+	i := strings.LastIndexByte(rest, '/')
+	if !found || i < 0 {
+		return "", "", "", false
 	}
-	if len(elem) < 3 {
-		return false
+	rest, ref = rest[:i], rest[i+1:]
+	i = strings.LastIndexByte(rest, '/')
+	if i < 0 {
+		return "", "", "", false
 	}
-	return elem[len(elem)-2] == "blobs" || (elem[len(elem)-3] == "blobs" &&
-		elem[len(elem)-2] == "uploads")
-}
-
-func IsManifest(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 4 {
-		return false
-	}
-	return elems[len(elems)-2] == "manifests"
-}
-
-func IsTags(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 4 {
-		return false
-	}
-	return elems[len(elems)-2] == "tags"
-}
-
-func IsCatalog(req *http.Request) bool {
-	elems := strings.Split(req.URL.Path, "/")
-	elems = elems[1:]
-	if len(elems) < 2 {
-		return false
-	}
-
-	return elems[len(elems)-1] == "_catalog"
-}
-
-func IsV2(req *http.Request) bool {
-	elems := strings.Split(strings.Trim(req.URL.Path, "/"), "/")
-	if len(elems) < 1 {
-		return false
-	}
-	return elems[len(elems)-1] == "v2"
+	return rest[:i], rest[i+1:], ref, true
 }
 
 // Helm writes build metadata into OCI tags with "_" in place of "+", because the

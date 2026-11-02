@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 )
 
@@ -36,19 +38,17 @@ func (r *Registry) v2(resp http.ResponseWriter, req *http.Request) error {
 	if req.URL.Path == "/api/systeminfo" || req.URL.Path == "/api/v2.0/systeminfo" {
 		return r.harborInfoHandler(resp)
 	}
-	if helper.IsBlob(req) {
+	_, kind, _, ok := helper.SplitPath(req.URL.Path)
+	switch {
+	case ok && kind == "blobs":
 		return r.blobs(resp, req)
-	}
-	if helper.IsManifest(req) {
+	case ok && kind == "manifests":
 		return r.manifests(resp, req)
-	}
-	if helper.IsTags(req) {
+	case ok && kind == "tags":
 		return r.tags(resp, req)
-	}
-	if helper.IsCatalog(req) {
+	case path.Base(req.URL.Path) == "_catalog":
 		return r.catalog(resp, req)
-	}
-	if helper.IsV2(req) {
+	case strings.Trim(req.URL.Path, "/") == "v2":
 		resp.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 		resp.WriteHeader(200)
 		return nil
