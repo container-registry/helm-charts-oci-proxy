@@ -67,7 +67,17 @@ helm install ocip oci://8gears.container-registry.com/library/helm-charts-oci-pr
 | `app.env_vars.INDEX_CACHE_TTL` | `14400` | Chart index cache duration in seconds (4h) |
 | `app.env_vars.INDEX_ERROR_CACHE_TTL` | `30` | Retry delay for failed index fetches in seconds |
 | `app.env_vars.REWRITE_DEPENDENCIES` | `false` | Rewrite chart dependency URLs to point through the proxy. **Warning:** modifies the served chart tarball, so upstream signature verification (`.prov` / `helm verify`) fails for rewritten charts |
-| `app.env_vars.PROXY_HOST` | `""` | Override proxy host for rewritten URLs (defaults to request Host header) |
+| `app.env_vars.PROXY_HOST` | `""` | Proxy host used in rewritten dependency URLs, a bare `host[:port]`. Required when `REWRITE_DEPENDENCIES` is `true`; rendering fails without it |
+| `app.env_vars.SHUTDOWN_TIMEOUT` | `25` | Seconds the proxy lets in-flight requests finish after SIGTERM |
+
+### Graceful shutdown
+
+On termination the pod first sleeps `shutdown.preStopSleepSeconds`, so endpoints and ingress controllers stop routing to it, then the proxy gets SIGTERM and drains in-flight requests for `app.env_vars.SHUTDOWN_TIMEOUT` seconds.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `shutdown.preStopSleepSeconds` | `5` | preStop sleep before SIGTERM; `0` disables the hook |
+| `shutdown.terminationGracePeriodSeconds` | `null` | Pod grace period. Defaults to preStop sleep + `SHUTDOWN_TIMEOUT` + 5 (35); an explicit value below preStop sleep + `SHUTDOWN_TIMEOUT` fails rendering |
 
 ### Persistence
 
