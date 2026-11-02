@@ -3,10 +3,7 @@ package manifest
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -18,26 +15,21 @@ import (
 	"helm.sh/helm/v3/pkg/repo"
 )
 
-// hashingReader hashes and counts what is read through it.
 type hashingReader struct {
 	r io.Reader
-	h hash.Hash
+	d digest.Digester
 	n int64
 }
 
 func newHashingReader(r io.Reader) *hashingReader {
-	return &hashingReader{r: r, h: sha256.New()}
+	d := digest.SHA256.Digester()
+	return &hashingReader{r: io.TeeReader(r, d.Hash()), d: d}
 }
 
 func (c *hashingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
-	c.h.Write(p[:n])
 	c.n += int64(n)
 	return n, err
-}
-
-func (c *hashingReader) digest() digest.Digest {
-	return digest.NewDigestFromEncoded(digest.SHA256, hex.EncodeToString(c.h.Sum(nil)))
 }
 
 func upstreamError(format string, a ...any) *errors.RegError {
@@ -112,11 +104,11 @@ func (m *Manifests) prepareStreamed(ctx context.Context, repoKey string, chartVe
 	if counter.n > maxDownloadSize {
 		return upstreamError("upstream %s response exceeds %d bytes", downloadURL, maxDownloadSize)
 	}
-	m.checkIndexDigest(chartVer, counter.digest().Encoded())
+	m.checkIndexDigest(chartVer, counter.d.Digest().Encoded())
 	// A chart without dependencies to rewrite keeps the upstream's bytes.
 	if rw != nil && !rw.modified {
 		served, rewriteHost = counter, ""
 	}
-	layer := layerDescriptor(downloadURL, served.digest(), served.n)
+	layer := layerDescriptor(downloadURL, served.d.Digest(), served.n)
 	return m.storeChart(repoKey, chartVer, reference, chartMeta, layer, rewriteHost, downloadURL)
 }
