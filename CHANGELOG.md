@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.2.2...v2.0.0) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* process-wide dependency rewriting, graceful shutdown, strict configuration ([#110](https://github.com/container-registry/helm-charts-oci-proxy/issues/110))
+
+### Bug Fixes
+
+* process-wide dependency rewriting, graceful shutdown, strict configuration ([#110](https://github.com/container-registry/helm-charts-oci-proxy/issues/110)) ([a3ef21c](https://github.com/container-registry/helm-charts-oci-proxy/commit/a3ef21cb44b3e48664a55221d1eb4960726d0e58))
+
 ## [1.2.2](https://github.com/container-registry/helm-charts-oci-proxy/compare/v1.2.1...v1.2.2) (2026-11-01)
 
 
