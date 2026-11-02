@@ -19,7 +19,6 @@ import (
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/blobs/handler"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
@@ -168,8 +167,8 @@ func (m *Manifests) Handle(resp http.ResponseWriter, req *http.Request) error {
 	}
 
 	elem = elem[1:]
-	// Cached manifests are keyed by the index version, so the tag form is
-	// normalised once here and never looked up again.
+	// Cached manifests are keyed by the index version, or by the tag that named
+	// it with the leading "v" added or removed (see prepareChart).
 	target := ManifestTarget(elem[len(elem)-1])
 
 	var repoParts []string
@@ -265,14 +264,17 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 	if index, _ := m.GetIndex(repoPath); index != nil {
 		if versions, ok := index.Entries[chartName]; ok {
 			fromIndex = true
+			var known, listed []string
 			for _, v := range versions {
+				known = append(known, v.Version)
 				// Same resolution as prepareChart: versions without a convertible
 				// tarball would only ever answer 404.
 				if u, err := ChartURL(repoPath, v); err != nil || u.Scheme == "oci" {
 					continue
 				}
-				tags = append(tags, helper.VersionToTag(strings.TrimLeft(v.Version, "v")))
+				listed = append(listed, v.Version)
 			}
+			tags = versionTags(known, listed)
 		}
 	}
 
@@ -284,11 +286,13 @@ func (m *Manifests) HandleTags(resp http.ResponseWriter, req *http.Request) erro
 			}
 			names = m.names(fullRepo)
 		}
-		for _, tag := range names {
-			if !strings.Contains(tag, "sha256:") {
-				tags = append(tags, helper.VersionToTag(tag))
+		var versions []string
+		for _, name := range names {
+			if !strings.Contains(name, "sha256:") {
+				versions = append(versions, name)
 			}
 		}
+		tags = versionTags(versions, versions)
 	}
 	sort.Strings(tags)
 

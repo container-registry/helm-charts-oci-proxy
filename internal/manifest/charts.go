@@ -105,20 +105,11 @@ func getDeterministicCreatedTimestamp(chartVer *repo.ChartVersion) time.Time {
 	return baseTime.Add(time.Duration(offset) * time.Second)
 }
 
-// ManifestTarget turns a requested manifest tag into the version key the
-// proxy caches manifests under: a leading "v" is dropped and Helm's "_" form of
-// build metadata becomes "+".
+// ManifestTarget turns a requested manifest tag into the key the proxy caches
+// manifests under: Helm's "_" form of build metadata becomes "+". A leading "v"
+// is kept, because an index can list 1.0.0 and v1.0.0 as different charts.
 func ManifestTarget(tag string) string {
-	return helper.TagToVersion(strings.TrimPrefix(tag, "v"))
-}
-
-// IndexReference is the reference prepareChart looks up in the index for a
-// manifest target.
-func IndexReference(target string) string {
-	if target == "" || strings.HasPrefix(target, "v") {
-		return target
-	}
-	return "v" + target
+	return helper.TagToVersion(tag)
 }
 
 // ChartURL resolves the download URL of a chart version the way helm's
@@ -149,10 +140,8 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 		return downloadError(fmt.Errorf("index file fetch error: %s: %w", path, err), "NAME_UNKNOWN")
 	}
 
-	reference = IndexReference(reference)
-
 	m.log.Printf("searching index for %s with reference %s\n", chart, reference)
-	chartVer, err := index.Get(chart, reference)
+	chartVer, err := ResolveVersion(index, chart, reference)
 	if err != nil {
 		return &errors.RegError{
 			Status:  http.StatusNotFound,
@@ -168,7 +157,16 @@ func (m *Manifests) prepareChart(ctx context.Context, repo string, reference str
 			Message: fmt.Sprintf("Chart has no URLs"),
 		}
 	}
-	reference = strings.TrimPrefix(chartVer.Version, "v")
+	// Both store paths below key the manifest by the index version; a tag that
+	// named it with the leading "v" added or removed is aliased to it.
+	if reference != "" && reference != chartVer.Version && toggleV(reference) == chartVer.Version {
+		repoKey := path + "/" + chartVer.Name
+		if m.writeAlias(repoKey, chartVer.Version, reference) {
+			return nil
+		}
+		defer m.writeAlias(repoKey, chartVer.Version, reference)
+	}
+	reference = chartVer.Version
 
 	u, err := ChartURL(path, chartVer)
 	if err != nil {
