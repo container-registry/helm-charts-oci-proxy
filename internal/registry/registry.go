@@ -4,12 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
-	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
 	"github.com/sirupsen/logrus"
 	"io"
 	"log"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 )
@@ -38,17 +36,22 @@ func (r *Registry) v2(resp http.ResponseWriter, req *http.Request) error {
 	if req.URL.Path == "/api/systeminfo" || req.URL.Path == "/api/v2.0/systeminfo" {
 		return r.harborInfoHandler(resp)
 	}
-	_, kind, _, ok := helper.SplitPath(req.URL.Path)
+	// Routes by the trailing segments only, so a prefix before /v2/, as Harbor's
+	// proxy cache sends, is routed the same way.
+	elem := strings.Split(req.URL.Path, "/")
+	n := len(elem)
+	b := strings.Split(strings.TrimSuffix(req.URL.Path, "/"), "/")
+	nb := len(b)
 	switch {
-	case ok && kind == "blobs":
+	case nb >= 4 && (b[nb-2] == "blobs" || b[nb-3] == "blobs" && b[nb-2] == "uploads"):
 		return r.blobs(resp, req)
-	case ok && kind == "manifests":
+	case n >= 5 && elem[n-2] == "manifests":
 		return r.manifests(resp, req)
-	case ok && kind == "tags":
+	case n >= 5 && elem[n-2] == "tags":
 		return r.tags(resp, req)
-	case path.Base(req.URL.Path) == "_catalog":
+	case n >= 3 && elem[n-1] == "_catalog":
 		return r.catalog(resp, req)
-	case strings.Trim(req.URL.Path, "/") == "v2":
+	case strings.HasSuffix("/"+strings.Trim(req.URL.Path, "/"), "/v2"):
 		resp.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
 		resp.WriteHeader(200)
 		return nil

@@ -16,21 +16,22 @@ package helper
 
 import "strings"
 
-// SplitPath splits /v2/<repo>/<kind>/<ref>. Routing and the manifest, tag and
-// blob handlers share it, so a blob is looked up under the same repository
-// key as its manifest.
+// SplitPath splits [<prefix>/]v2/<repo>/<kind>/<ref>. Harbor's proxy cache puts
+// its own path in front of /v2/, so the repository is what lies between the
+// last "v2" segment and kind; without one, the first segment is dropped, as
+// the manifest handler on main did. The manifest, tag and blob handlers share it, so
+// a blob is looked up under the same repository key as its manifest.
 func SplitPath(p string) (repo, kind, ref string, ok bool) {
-	rest, found := strings.CutPrefix(p, "/v2/")
-	i := strings.LastIndexByte(rest, '/')
-	if !found || i < 0 {
+	elem := strings.Split(p, "/")
+	n := len(elem)
+	if n < 5 {
 		return "", "", "", false
 	}
-	rest, ref = rest[:i], rest[i+1:]
-	i = strings.LastIndexByte(rest, '/')
-	if i < 0 {
-		return "", "", "", false
+	start := n - 2
+	for start > 2 && elem[start-1] != "v2" {
+		start--
 	}
-	return rest[:i], rest[i+1:], ref, true
+	return strings.Join(elem[start:n-2], "/"), elem[n-2], elem[n-1], true
 }
 
 // Helm writes build metadata into OCI tags with "_" in place of "+", because the

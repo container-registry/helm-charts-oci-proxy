@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
+	"github.com/container-registry/helm-charts-oci-proxy/internal/registry"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -302,3 +303,35 @@ func TestBlob_ExpiredManifestIsUnknown(t *testing.T) {
 		t.Fatalf("blob GET after its manifest expired: got %v, want 404", err)
 	}
 }
+
+// Harbor's proxy cache sends /<its path>/v2/<repo>/...; through the router such
+// a request must get the same answer as the plain /v2/<repo>/... form.
+func TestRouting_PrefixedPathMatchesPlain(t *testing.T) {
+	f := newStreamFixture(t)
+	d := f.layer(t)
+	h := registry.New(handle(f.m.Handle), handle(f.m.HandleBlobs), handle(f.m.HandleTags), handle(f.m.HandleCatalog))
+	host := strings.TrimSuffix(f.repo, "/demo")
+	get := func(method, p string) (int, string, string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, p, nil))
+		return rec.Code, rec.Header().Get("Docker-Content-Digest"), rec.Body.String()
+	}
+	for _, tc := range []struct{ method, suffix string }{
+		{http.MethodGet, "/manifests/1.0.0"},
+		{http.MethodHead, "/manifests/1.0.0"},
+		{http.MethodGet, "/blobs/" + d.String()},
+		{http.MethodHead, "/blobs/" + d.String()},
+		{http.MethodGet, "/tags/list"},
+	} {
+		pc, pd, pb := get(tc.method, "/v2/"+f.repo+tc.suffix)
+		if pc != http.StatusOK {
+			t.Fatalf("%s /v2/%s%s: status %d", tc.method, f.repo, tc.suffix, pc)
+		}
+		qc, qd, qb := get(tc.method, "/"+host+"/v2/"+f.repo+tc.suffix)
+		if qc != pc || qd != pd || qb != pb {
+			t.Errorf("%s prefixed %s: %d %s, plain: %d %s", tc.method, tc.suffix, qc, qd, pc, pd)
+		}
+	}
+}
+
+func handle(f func(http.ResponseWriter, *http.Request) error) registry.Handler { return f }

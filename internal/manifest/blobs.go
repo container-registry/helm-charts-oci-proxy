@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/container-registry/helm-charts-oci-proxy/internal/errors"
 	"github.com/container-registry/helm-charts-oci-proxy/internal/helper"
@@ -25,7 +26,7 @@ var regErrBlobUnknown = &errors.RegError{
 // requested repository. A layer is streamed from its upstream and verified
 // against the manifest's digest, so tarballs are never held in memory.
 func (m *Manifests) HandleBlobs(resp http.ResponseWriter, req *http.Request) error {
-	repo, _, ref, ok := helper.SplitPath(req.URL.Path)
+	repo, _, ref, ok := helper.SplitPath(strings.TrimSuffix(req.URL.Path, "/"))
 	if !ok {
 		return &errors.RegError{
 			Status:  http.StatusBadRequest,
