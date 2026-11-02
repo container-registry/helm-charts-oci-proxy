@@ -292,3 +292,17 @@ func TestStore_FailureNeverReplacesManifest(t *testing.T) {
 		t.Errorf("%d failures counted, want 0", m.failures)
 	}
 }
+
+// Prepared charts do not count against the failure budget: with the map full
+// of manifests, a 404 is still remembered and a sweep does not reach the
+// upstream on every request.
+func TestStore_FailuresStayCachedUnderManifestLoad(t *testing.T) {
+	m := newTestManifests(t, Config{IndexErrorCacheTTL: time.Hour})
+	for i := range maxFailures {
+		m.insert("r/demo", &record{expires: time.Now().Add(time.Hour)}, fmt.Sprint("sha256:", i), fmt.Sprint("v", i))
+	}
+	m.fail("r/demo", "missing", resultNotFound("r/demo", "missing"))
+	if m.failed("r/demo", "missing") == nil {
+		t.Fatal("a 404 was not cached while prepared charts fill the map")
+	}
+}

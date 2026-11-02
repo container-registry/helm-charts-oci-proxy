@@ -510,3 +510,16 @@ func TestStreamedLayer_ClientCancelKeepsSourceOrder(t *testing.T) {
 		t.Errorf("source order %v after a client cancel, want %s first", b.urls, first)
 	}
 }
+
+// readChartMetadata also splits entry names on "\", so demo\Chart.yaml is the
+// chart's own Chart.yaml for the rewrite as well.
+func TestRewrite_BackslashChartYAMLIsRewritten(t *testing.T) {
+	tgz := tarballOf(t, [][2]string{{`demo\Chart.yaml`, chartWithDependency("demo", "https://top.example.com/charts")}})
+	if _, err := readChartMetadata(bytes.NewReader(tgz)); err != nil {
+		t.Fatalf("readChartMetadata rejected the chart: %v", err)
+	}
+	modified, err := rewriteChart(io.Discard, bytes.NewReader(tgz), "proxy.example.com", log.New(io.Discard, "", 0))
+	if err != nil || !modified {
+		t.Fatalf("rewriteChart: modified %v, %v; want the chart's Chart.yaml rewritten", modified, err)
+	}
+}
