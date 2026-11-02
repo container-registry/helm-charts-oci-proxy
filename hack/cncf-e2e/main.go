@@ -137,6 +137,8 @@ func main() {
 		Results:  results,
 	}
 	if err := rep.write(*out); err != nil {
+		// log.Fatal skips deferred calls.
+		os.RemoveAll(work)
 		log.Fatal(err)
 	}
 	log.Printf("done in %s: %v; results in %s", wall.Round(time.Second), rep.classCounts(), *out)
