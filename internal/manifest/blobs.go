@@ -99,6 +99,9 @@ func (m *Manifests) openBlob(ctx context.Context, repo string, b blob) (io.ReadC
 			continue
 		}
 		blobsStreamed.Add(1)
+		if b.rewriteHost != "" {
+			body = rewriteStream(body, b.rewriteHost, m.log)
+		}
 		vrc, err := verify.ReadCloser(body, b.size, h)
 		if err != nil {
 			body.Close()

@@ -14,10 +14,9 @@ import (
 )
 
 // storeChart builds the OCI manifest of a chart version and stores its record.
-// The layer is kept when data is given; otherwise it is streamed from
-// sourceURL. Both preparation paths go through here, so a chart gets the same
-// manifest digest whichever path prepared it.
-func (m *Manifests) storeChart(repoKey string, chartVer *repo.ChartVersion, reference string, meta *chart.Metadata, layerDesc ocispec.Descriptor, data []byte, sourceURL string) *errors.RegError {
+// The layer is streamed from sourceURL, with its dependencies rewritten when
+// rewriteHost is set.
+func (m *Manifests) storeChart(repoKey string, chartVer *repo.ChartVersion, reference string, meta *chart.Metadata, layerDesc ocispec.Descriptor, rewriteHost, sourceURL string) *errors.RegError {
 	configData, err := json.Marshal(meta)
 	if err != nil {
 		return errors.RegErrInternal(err)
@@ -40,10 +39,7 @@ func (m *Manifests) storeChart(repoKey string, chartVer *repo.ChartVersion, refe
 		return errors.RegErrInternal(err)
 	}
 
-	layer := &blob{digest: layerDesc.Digest, size: layerDesc.Size, data: data}
-	if data == nil {
-		layer.urls = []string{sourceURL}
-	}
+	layer := &blob{digest: layerDesc.Digest, size: layerDesc.Size, urls: []string{sourceURL}, rewriteHost: rewriteHost}
 	d := digest.FromBytes(manifestJSON).String()
 	refs := []string{d}
 	if reference != "" {

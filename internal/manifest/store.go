@@ -26,10 +26,12 @@ type record struct {
 type blob struct {
 	digest digest.Digest
 	size   int64
-	data   []byte // the config, or a rewritten chart, which no upstream serves
+	data   []byte // the config
 	// Versions of a repository that publish the same tarball share one layer,
 	// so every URL that served it is tried. Guarded by Manifests.mu.
 	urls []string
+	// The layer is the upstream tarball with its dependencies pointed here.
+	rewriteHost string
 }
 
 // maxRecords bounds the keys of all records. A failure that does not fit is not
@@ -60,9 +62,9 @@ func (m *Manifests) insert(repo string, r *record, refs ...string) {
 		entries = map[string]*record{}
 		m.records[repo] = entries
 	}
-	if r.layer != nil && r.layer.data == nil {
+	if r.layer != nil {
 		for _, o := range entries {
-			if o.layer != nil && o.layer.data == nil && o.layer.digest == r.layer.digest {
+			if o.layer != nil && o.layer.digest == r.layer.digest && o.layer.rewriteHost == r.layer.rewriteHost {
 				for _, u := range r.layer.urls {
 					if !slices.Contains(o.layer.urls, u) {
 						o.layer.urls = append(o.layer.urls, u)

@@ -4,8 +4,19 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/opencontainers/go-digest"
 	"helm.sh/helm/v3/pkg/chart"
 	"sigs.k8s.io/yaml"
 )
@@ -112,29 +123,6 @@ func TestRewriteDependencyURL(t *testing.T) {
 	}
 }
 
-func TestGetSkipReason(t *testing.T) {
-	tests := []struct {
-		url      string
-		expected string
-	}{
-		{"", "empty URL"},
-		{"@bitnami", "Helm repo alias"},
-		{"alias:bitnami", "Helm repo alias"},
-		{"file://./mychart", "local file reference"},
-		{"file:./mychart", "local file reference"},
-		{"something-else", "unknown"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.url, func(t *testing.T) {
-			result := getSkipReason(tt.url)
-			if result != tt.expected {
-				t.Errorf("getSkipReason(%q) = %v, want %v", tt.url, result, tt.expected)
-			}
-		})
-	}
-}
-
 // createTestTarball creates a gzipped tarball with a Chart.yaml for testing
 func createTestTarball(chartName string, metadata *chart.Metadata) ([]byte, error) {
 	var buf bytes.Buffer
@@ -186,201 +174,200 @@ func createTestTarball(chartName string, metadata *chart.Metadata) ([]byte, erro
 	return buf.Bytes(), nil
 }
 
-func TestExtractChartYAML(t *testing.T) {
-	metadata := &chart.Metadata{
-		APIVersion: "v2",
-		Name:       "test-chart",
-		Version:    "1.0.0",
-		Dependencies: []*chart.Dependency{
-			{
-				Name:       "redis",
-				Version:    "17.0.0",
-				Repository: "https://charts.bitnami.com/bitnami",
-			},
-		},
-	}
-
-	tarball, err := createTestTarball("test-chart", metadata)
-	if err != nil {
-		t.Fatalf("failed to create test tarball: %v", err)
-	}
-
-	extracted, path, err := extractChartYAML(tarball)
-	if err != nil {
-		t.Fatalf("extractChartYAML() error = %v", err)
-	}
-
-	if path != "test-chart/Chart.yaml" {
-		t.Errorf("extractChartYAML() path = %v, want test-chart/Chart.yaml", path)
-	}
-
-	if extracted.Name != metadata.Name {
-		t.Errorf("extractChartYAML() name = %v, want %v", extracted.Name, metadata.Name)
-	}
-
-	if len(extracted.Dependencies) != 1 {
-		t.Errorf("extractChartYAML() dependencies count = %v, want 1", len(extracted.Dependencies))
+// Only http(s) and oci dependency repositories are pointed at the proxy;
+// local files and repository aliases are kept.
+func TestRewriteChart(t *testing.T) {
+	const proxied = "oci://chartproxy.example.com/charts.example.com/stable"
+	for _, tc := range []struct {
+		name     string
+		deps     []*chart.Dependency
+		modified bool
+		want     map[string]string
+	}{
+		{"no dependencies", nil, false, map[string]string{}},
+		{"remote dependencies", []*chart.Dependency{
+			{Name: "redis", Version: "17.0.0", Repository: "https://charts.example.com/stable"},
+			{Name: "postgresql", Version: "12.0.0", Repository: "https://charts.example.com/stable"},
+		}, true, map[string]string{"redis": proxied, "postgresql": proxied}},
+		{"mixed dependencies", []*chart.Dependency{
+			{Name: "redis", Version: "17.0.0", Repository: "https://charts.example.com/stable"},
+			{Name: "local-chart", Version: "1.0.0", Repository: "file://../local-chart"},
+			{Name: "aliased-chart", Version: "1.0.0", Repository: "@myrepo"},
+		}, true, map[string]string{"redis": proxied, "local-chart": "file://../local-chart", "aliased-chart": "@myrepo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tgz, err := createTestTarball("test-chart", &chart.Metadata{APIVersion: "v2", Name: "test-chart", Version: "1.0.0", Dependencies: tc.deps})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			modified, err := rewriteChart(&out, bytes.NewReader(tgz), "chartproxy.example.com", log.New(io.Discard, "", 0))
+			if err != nil || modified != tc.modified {
+				t.Fatalf("rewriteChart: modified %v, %v; want %v", modified, err, tc.modified)
+			}
+			got := map[string]string{}
+			for _, d := range chartYAMLs(t, out.Bytes())["test-chart/Chart.yaml"].Dependencies {
+				got[d.Name] = d.Repository
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("repositories = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestRewriteChartDependencies(t *testing.T) {
-	proxyHost := "chartproxy.example.com"
-
-	t.Run("chart with dependencies", func(t *testing.T) {
-		metadata := &chart.Metadata{
-			APIVersion: "v2",
-			Name:       "test-chart",
-			Version:    "1.0.0",
-			Dependencies: []*chart.Dependency{
-				{
-					Name:       "redis",
-					Version:    "17.0.0",
-					Repository: "https://charts.bitnami.com/bitnami",
-				},
-				{
-					Name:       "postgresql",
-					Version:    "12.0.0",
-					Repository: "https://charts.bitnami.com/bitnami",
-				},
-			},
+// chartYAMLs parses every Chart.yaml in a chart archive, keyed by entry name.
+func chartYAMLs(t *testing.T, tgz []byte) map[string]*chart.Metadata {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader(tgz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]*chart.Metadata{}
+	tr := tar.NewReader(zr)
+	for {
+		hd, err := tr.Next()
+		if err == io.EOF {
+			return out
 		}
-
-		tarball, err := createTestTarball("test-chart", metadata)
 		if err != nil {
-			t.Fatalf("failed to create test tarball: %v", err)
+			t.Fatal(err)
 		}
-
-		rewritten, result, err := rewriteChartDependencies(tarball, proxyHost, nil)
-		if err != nil {
-			t.Fatalf("rewriteChartDependencies() error = %v", err)
-		}
-
-		if !result.Modified {
-			t.Error("rewriteChartDependencies() Modified = false, want true")
-		}
-
-		if len(result.Dependencies) != 2 {
-			t.Errorf("rewriteChartDependencies() dependencies count = %v, want 2", len(result.Dependencies))
-		}
-
-		// Extract and verify the rewritten tarball
-		newMetadata, _, err := extractChartYAML(rewritten)
-		if err != nil {
-			t.Fatalf("failed to extract rewritten tarball: %v", err)
-		}
-
-		for _, dep := range newMetadata.Dependencies {
-			expectedURL := "oci://chartproxy.example.com/charts.bitnami.com/bitnami"
-			if dep.Repository != expectedURL {
-				t.Errorf("dependency %s repository = %v, want %v", dep.Name, dep.Repository, expectedURL)
+		if strings.HasSuffix(hd.Name, "/Chart.yaml") {
+			data, _ := io.ReadAll(tr)
+			var md chart.Metadata
+			if err := yaml.Unmarshal(data, &md); err != nil {
+				t.Fatal(err)
 			}
+			out[hd.Name] = &md
 		}
-	})
+	}
+}
 
-	t.Run("chart without dependencies", func(t *testing.T) {
-		metadata := &chart.Metadata{
-			APIVersion: "v2",
-			Name:       "test-chart",
-			Version:    "1.0.0",
-		}
+func chartWithDependency(name, repository string) string {
+	return fmt.Sprintf("apiVersion: v2\nname: %s\nversion: 1.0.0\ndependencies:\n  - name: dep\n    version: 1.0.0\n    repository: %s\n", name, repository)
+}
 
-		tarball, err := createTestTarball("test-chart", metadata)
-		if err != nil {
-			t.Fatalf("failed to create test tarball: %v", err)
-		}
+// rewritingFixture serves a chart whose own and subchart Chart.yaml both list
+// a dependency, with the subchart first in the archive.
+func rewritingFixture(t *testing.T) *streamFixture {
+	t.Helper()
+	f := newStreamFixture(t)
+	f.m.config.RewriteDependencies = true
+	f.m.config.ProxyHost = "proxy.example.com"
+	f.serve.Store(tarballOf(t, [][2]string{
+		{"demo/charts/sub/Chart.yaml", chartWithDependency("sub", "https://sub.example.com/charts")},
+		{"demo/Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")},
+	}))
+	return f
+}
 
-		rewritten, result, err := rewriteChartDependencies(tarball, proxyHost, nil)
-		if err != nil {
-			t.Fatalf("rewriteChartDependencies() error = %v", err)
-		}
+func readLayer(t *testing.T, f *streamFixture, d digest.Digest) []byte {
+	t.Helper()
+	rc, err := f.open(t, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("layer read: %v", err)
+	}
+	return data
+}
 
-		if result.Modified {
-			t.Error("rewriteChartDependencies() Modified = true, want false")
-		}
+// Only the chart's own Chart.yaml is rewritten. A subchart's charts/x/Chart.yaml
+// also ends in /Chart.yaml; when it came first in the archive, it was
+// rewritten instead and the chart's own dependencies were left alone.
+func TestRewrite_TopLevelChartYAMLOnly(t *testing.T) {
+	f := rewritingFixture(t)
+	got := chartYAMLs(t, readLayer(t, f, f.layer(t)))
+	if r := got["demo/Chart.yaml"].Dependencies[0].Repository; r != "oci://proxy.example.com/top.example.com/charts" {
+		t.Errorf("chart dependency repository = %s, not rewritten", r)
+	}
+	if r := got["demo/charts/sub/Chart.yaml"].Dependencies[0].Repository; r != "https://sub.example.com/charts" {
+		t.Errorf("subchart dependency repository = %s, want it unchanged", r)
+	}
+}
 
-		// Should return original tarball
-		if !bytes.Equal(rewritten, tarball) {
-			t.Error("rewriteChartDependencies() should return original tarball when no dependencies")
+// A rewritten layer is not stored: every blob GET rewrites the upstream
+// tarball again, so the rewrite must give the same bytes each time it runs.
+func TestRewrite_LayerIsRewrittenOnEveryRead(t *testing.T) {
+	var layers []digest.Digest
+	for range 2 {
+		f := rewritingFixture(t)
+		d := f.layer(t)
+		if b, _ := f.m.findBlob(f.repo, d); b.data != nil {
+			t.Fatalf("the rewritten tarball (%d bytes) is held in memory", len(b.data))
 		}
-	})
+		if got := digest.FromBytes(readLayer(t, f, d)); got != d {
+			t.Fatalf("layer read %s, manifest says %s", got, d)
+		}
+		layers = append(layers, d)
+	}
+	if layers[0] != layers[1] {
+		t.Errorf("two preparations of one tarball gave layers %s and %s", layers[0], layers[1])
+	}
+}
 
-	t.Run("chart with mixed dependencies", func(t *testing.T) {
-		metadata := &chart.Metadata{
-			APIVersion: "v2",
-			Name:       "test-chart",
-			Version:    "1.0.0",
-			Dependencies: []*chart.Dependency{
-				{
-					Name:       "redis",
-					Version:    "17.0.0",
-					Repository: "https://charts.bitnami.com/bitnami",
-				},
-				{
-					Name:       "local-chart",
-					Version:    "1.0.0",
-					Repository: "file://../local-chart",
-				},
-				{
-					Name:       "aliased-chart",
-					Version:    "1.0.0",
-					Repository: "@myrepo",
-				},
-			},
-		}
+// A chart helm rejects is rejected with rewriting on as well, while the rewrite
+// still streams the rest of the archive.
+func TestRewrite_InvalidChartFailsCleanly(t *testing.T) {
+	noise := make([]byte, 256<<10)
+	_, _ = rand.Read(noise)
+	f := newStreamFixture(t)
+	f.m.config.RewriteDependencies = true
+	f.m.config.ProxyHost = "proxy.example.com"
+	f.serve.Store(tarballOf(t, [][2]string{
+		{"demo/Chart.yaml", chartWithDependency("demo", "https://top.example.com/charts")},
+		{"demo/values.yaml", "a: [\n"},
+		{"demo/templates/noise.txt", string(noise)},
+	}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/"+f.repo+"/manifests/1.0.0", nil)
+	if err := f.m.Handle(rec, req); err == nil {
+		t.Fatal("a chart helm rejects was prepared")
+	}
+}
 
-		tarball, err := createTestTarball("test-chart", metadata)
-		if err != nil {
-			t.Fatalf("failed to create test tarball: %v", err)
-		}
+// blockingSource yields a gzip header, then blocks until closed and reads
+// once more after a pause, recording whether Close of the rewrite had already
+// returned by then.
+type blockingSource struct {
+	sent, closed  chan struct{}
+	closeReturned atomic.Bool
+	lateRead      atomic.Bool
+	once          sync.Once
+}
 
-		rewritten, result, err := rewriteChartDependencies(tarball, proxyHost, nil)
-		if err != nil {
-			t.Fatalf("rewriteChartDependencies() error = %v", err)
-		}
+func (s *blockingSource) Read(p []byte) (int, error) {
+	select {
+	case <-s.sent:
+	default:
+		close(s.sent)
+		return copy(p, []byte{0x1f, 0x8b}), nil
+	}
+	<-s.closed
+	time.Sleep(50 * time.Millisecond)
+	s.lateRead.Store(s.closeReturned.Load())
+	return 0, io.ErrClosedPipe
+}
 
-		if !result.Modified {
-			t.Error("rewriteChartDependencies() Modified = false, want true")
-		}
+func (s *blockingSource) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
 
-		if len(result.Dependencies) != 3 {
-			t.Errorf("result.Dependencies count = %v, want 3", len(result.Dependencies))
-		}
-
-		// Check that redis was rewritten
-		found := false
-		for _, dep := range result.Dependencies {
-			if dep.Name == "redis" && !dep.Skipped {
-				found = true
-				if dep.NewURL != "oci://chartproxy.example.com/charts.bitnami.com/bitnami" {
-					t.Errorf("redis NewURL = %v, want oci://chartproxy.example.com/charts.bitnami.com/bitnami", dep.NewURL)
-				}
-			}
-		}
-		if !found {
-			t.Error("redis dependency not found in result")
-		}
-
-		// Verify in the tarball
-		newMetadata, _, err := extractChartYAML(rewritten)
-		if err != nil {
-			t.Fatalf("failed to extract rewritten tarball: %v", err)
-		}
-
-		for _, dep := range newMetadata.Dependencies {
-			switch dep.Name {
-			case "redis":
-				if dep.Repository != "oci://chartproxy.example.com/charts.bitnami.com/bitnami" {
-					t.Errorf("redis repository = %v, want oci://...", dep.Repository)
-				}
-			case "local-chart":
-				if dep.Repository != "file://../local-chart" {
-					t.Errorf("local-chart repository = %v, want file://../local-chart", dep.Repository)
-				}
-			case "aliased-chart":
-				if dep.Repository != "@myrepo" {
-					t.Errorf("aliased-chart repository = %v, want @myrepo", dep.Repository)
-				}
-			}
-		}
-	})
+// The preparation reads what the upstream body counted once the rewrite is
+// closed; the rewrite must not be reading the body by then.
+func TestRewriteStream_CloseStopsReading(t *testing.T) {
+	src := &blockingSource{sent: make(chan struct{}), closed: make(chan struct{})}
+	rw := rewriteStream(src, "proxy.example.com", log.New(io.Discard, "", 0))
+	<-src.sent
+	rw.Close()
+	src.closeReturned.Store(true)
+	time.Sleep(100 * time.Millisecond)
+	if src.lateRead.Load() {
+		t.Fatal("the rewrite still read its source after Close returned")
+	}
 }

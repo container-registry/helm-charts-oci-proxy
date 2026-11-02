@@ -88,10 +88,9 @@ func (f *streamFixture) open(t *testing.T, d digest.Digest) (io.ReadCloser, erro
 	return f.m.openBlob(t.Context(), f.repo, b)
 }
 
-// The streamed path must produce the same manifest bytes as the buffered
-// path; a changed digest would make every client see every chart as new.
-// Dependency rewriting forces the buffered path; the test chart has no
-// dependencies, so the tarball is served unchanged there.
+// Enabling dependency rewriting must not change the manifest of a chart that
+// has no dependencies; a changed digest would make every client see every
+// chart as new.
 func TestStreamedManifestMatchesBuffered(t *testing.T) {
 	streamed := newStreamFixture(t)
 	sd, sb := streamed.manifest(t, "")
