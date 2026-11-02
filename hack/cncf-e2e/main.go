@@ -92,7 +92,7 @@ func main() {
 	defer os.RemoveAll(work)
 	k := newChecker(pu, client, guardUpstream(client, *allowPrivate), *helmBin, work, *timeout, *retryDelay)
 
-	jobs := buildJobs(k, disc.Packages, *allVersions, onlyRe, *conc)
+	jobs := buildJobs(k, disc.Packages, *allVersions, onlyRe, *conc, *perHost)
 	log.Printf("%d charts to check, concurrency %d, %d per host", len(jobs), *conc, *perHost)
 
 	ctx, stopSampling := context.WithCancel(context.Background())
@@ -192,7 +192,7 @@ func (j job) host() string {
 	return u.Host
 }
 
-func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp, conc int) []job {
+func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp, conc, perHost int) []job {
 	var selected []Package
 	for _, p := range pkgs {
 		if only == nil || only.MatchString(strings.TrimSuffix(p.Repository.URL, "/")+"/"+p.Name) {
@@ -200,7 +200,7 @@ func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp
 		}
 	}
 	if allVersions {
-		prefetchIndexes(k, selected, conc)
+		prefetchIndexes(k, selected, conc, perHost)
 	}
 	var jobs []job
 	for _, p := range selected {
@@ -222,8 +222,9 @@ func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp
 }
 
 // prefetchIndexes loads the index of every https repository, at most conc at a
-// time, so -all-versions does not fetch them one after another before any check starts.
-func prefetchIndexes(k *checker, pkgs []Package, conc int) {
+// time and perHost per host, so -all-versions does not fetch them one after
+// another before any check starts.
+func prefetchIndexes(k *checker, pkgs []Package, conc, perHost int) {
 	urls := map[string]bool{}
 	for _, p := range pkgs {
 		if strings.HasPrefix(p.Repository.URL, "https://") {
@@ -231,12 +232,24 @@ func prefetchIndexes(k *checker, pkgs []Package, conc int) {
 		}
 	}
 	sem := make(chan struct{}, conc)
+	hostSem := map[string]chan struct{}{}
 	var wg sync.WaitGroup
 	for u := range urls {
+		h := u
+		if pu, err := url.Parse(u); err == nil {
+			h = pu.Host
+		}
+		hs, ok := hostSem[h]
+		if !ok {
+			hs = make(chan struct{}, perHost)
+			hostSem[h] = hs
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
+			hs <- struct{}{}
+			defer func() { <-hs }()
+			sem <- struct{}{}
 			defer func() { <-sem }()
 			_, _ = k.idx.get(u)
 		}()
