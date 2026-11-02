@@ -87,6 +87,11 @@ func (m *Manifests) insert(repo string, r *record, refs ...string) {
 	}
 	for _, ref := range refs {
 		old := entries[ref]
+		// A concurrent preparation can store the chart under a digest that
+		// another one just failed to resolve; the failure must not hide it.
+		if r.err != nil && old != nil && old.err == nil {
+			continue
+		}
 		if old != nil && old.err != nil {
 			m.failures--
 		}

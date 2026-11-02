@@ -278,3 +278,17 @@ func TestStore_ExpiryScanIsAmortised(t *testing.T) {
 		t.Errorf("%d failures cached, bound is %d", m.failures, maxFailures)
 	}
 }
+
+// A failure for a key that already holds a prepared chart is dropped; the
+// digest must not answer 404 for a chart that was stored under it.
+func TestStore_FailureNeverReplacesManifest(t *testing.T) {
+	m := newTestManifests(t, Config{IndexErrorCacheTTL: time.Hour})
+	m.insert("r/demo", &record{digest: "sha256:abc", expires: time.Now().Add(time.Hour)}, "sha256:abc", "1.0.0")
+	m.fail("r/demo", "sha256:abc", resultNotFound("r/demo", "sha256:abc"))
+	if r := m.lookup("r/demo", "sha256:abc"); r == nil || r.err != nil {
+		t.Fatalf("lookup after a failure for a stored digest = %+v, want the manifest", r)
+	}
+	if m.failures != 0 {
+		t.Errorf("%d failures counted, want 0", m.failures)
+	}
+}
