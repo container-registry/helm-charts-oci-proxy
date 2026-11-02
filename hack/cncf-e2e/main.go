@@ -51,6 +51,9 @@ func main() {
 	if *conc < 1 || *perHost < 1 {
 		log.Fatal("-concurrency and -per-host must be positive")
 	}
+	if err := validTarget(*target); err != nil {
+		log.Fatal(err)
+	}
 	var onlyRe *regexp.Regexp
 	var err error
 	if *only != "" {
@@ -89,7 +92,7 @@ func main() {
 	defer os.RemoveAll(work)
 	k := newChecker(pu, client, guardUpstream(client, *allowPrivate), *helmBin, work, *timeout, *retryDelay)
 
-	jobs := buildJobs(k, disc.Packages, *allVersions, onlyRe)
+	jobs := buildJobs(k, disc.Packages, *allVersions, onlyRe, *conc, *perHost)
 	log.Printf("%d charts to check, concurrency %d, %d per host", len(jobs), *conc, *perHost)
 
 	ctx, stopSampling := context.WithCancel(context.Background())
@@ -127,16 +130,30 @@ func main() {
 		PerHost:     *perHost,
 		AllVersions: *allVersions,
 		Discovery: DiscoverySummary{
-			Query: disc.Query, FetchedAt: disc.FetchedAt, Packages: len(disc.Packages), Cached: cached,
+			Query: disc.Query, FetchedAt: disc.FetchedAt, Packages: len(disc.Packages), Cached: cached, Warning: disc.Warning,
 		},
 		Memory:   mem,
 		Counters: counters,
 		Results:  results,
 	}
 	if err := rep.write(*out); err != nil {
+		// log.Fatal skips deferred calls.
+		os.RemoveAll(work)
 		log.Fatal(err)
 	}
 	log.Printf("done in %s: %v; results in %s", wall.Round(time.Second), rep.classCounts(), *out)
+}
+
+// validTarget rejects a -target the sampler would ignore, which would leave the
+// report without memory figures.
+func validTarget(target string) error {
+	if target == "" {
+		return nil
+	}
+	if name, ok := strings.CutPrefix(target, "docker:"); !ok || name == "" {
+		return fmt.Errorf("-target %q: want docker:<container>", target)
+	}
+	return nil
 }
 
 func checkHelm3(bin string) error {
@@ -175,12 +192,18 @@ func (j job) host() string {
 	return u.Host
 }
 
-func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp) []job {
-	var jobs []job
+func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp, conc, perHost int) []job {
+	var selected []Package
 	for _, p := range pkgs {
-		if only != nil && !only.MatchString(strings.TrimSuffix(p.Repository.URL, "/")+"/"+p.Name) {
-			continue
+		if only == nil || only.MatchString(strings.TrimSuffix(p.Repository.URL, "/")+"/"+p.Name) {
+			selected = append(selected, p)
 		}
+	}
+	if allVersions {
+		prefetchIndexes(k, selected, conc, perHost)
+	}
+	var jobs []job
+	for _, p := range selected {
 		if !allVersions || !strings.HasPrefix(p.Repository.URL, "https://") {
 			jobs = append(jobs, job{pkg: p, version: p.Version})
 			continue
@@ -196,6 +219,42 @@ func buildJobs(k *checker, pkgs []Package, allVersions bool, only *regexp.Regexp
 		}
 	}
 	return interleaveByHost(jobs)
+}
+
+// prefetchIndexes loads the index of every https repository, at most conc at a
+// time and perHost per host, so -all-versions does not fetch them one after
+// another before any check starts.
+func prefetchIndexes(k *checker, pkgs []Package, conc, perHost int) {
+	urls := map[string]bool{}
+	for _, p := range pkgs {
+		if strings.HasPrefix(p.Repository.URL, "https://") {
+			urls[p.Repository.URL] = true
+		}
+	}
+	sem := make(chan struct{}, conc)
+	hostSem := map[string]chan struct{}{}
+	var wg sync.WaitGroup
+	for u := range urls {
+		h := u
+		if pu, err := url.Parse(u); err == nil {
+			h = pu.Host
+		}
+		hs, ok := hostSem[h]
+		if !ok {
+			hs = make(chan struct{}, perHost)
+			hostSem[h] = hs
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			hs <- struct{}{}
+			defer func() { <-hs }()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			_, _ = k.idx.get(u)
+		}()
+	}
+	wg.Wait()
 }
 
 // interleaveByHost orders jobs round-robin across hosts so the per-host limit
