@@ -447,19 +447,49 @@ func getBytes(c *http.Client, u string, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("GET %s: %w", u, err)
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("GET %s: body exceeds %d bytes", u, limit)
+		return nil, &tooLargeError{url: u, limit: limit}
 	}
 	return data, nil
 }
 
-// getRetry repeats a failed GET once unless the upstream said the content is gone.
+type tooLargeError struct {
+	url   string
+	limit int64
+}
+
+func (e *tooLargeError) Error() string {
+	return fmt.Sprintf("GET %s: body exceeds %d bytes", e.url, e.limit)
+}
+
+// retryBackoff is a variable so tests do not wait.
+var retryBackoff = 5 * time.Second
+
+// transient reports whether repeating the request can succeed: network
+// failures and 408, 429 or 5xx answers. Policy refusals, other 4xx and an
+// oversized body give the same result again.
+func transient(err error) bool {
+	if err == nil || isPolicyError(err) {
+		return false
+	}
+	var tl *tooLargeError
+	if errors.As(err, &tl) {
+		return false
+	}
+	var se *statusError
+	if errors.As(err, &se) {
+		return se.status == http.StatusRequestTimeout || se.status == http.StatusTooManyRequests || se.status >= 500
+	}
+	return true
+}
+
+// getRetry repeats a GET once after a transient failure.
 func getRetry(c *http.Client, u string, limit int64) ([]byte, int, error) {
 	data, err := getBytes(c, u, limit)
-	var se *statusError
-	if err != nil && !isPolicyError(err) && !(errors.As(err, &se) && (se.status == http.StatusNotFound || se.status == http.StatusGone)) {
-		time.Sleep(5 * time.Second)
+	if transient(err) {
+		time.Sleep(retryBackoff)
 		data, err = getBytes(c, u, limit)
 	}
+	var se *statusError
 	if errors.As(err, &se) {
 		return nil, se.status, err
 	}
