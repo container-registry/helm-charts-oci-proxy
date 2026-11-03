@@ -5,8 +5,9 @@ description: Transparently proxy and transform Chart Repository styled Helm
   styled Helm Chart as an OCI image.
 type: application
 version: 2.0.6
-appVersion: "v2.0.1"
 home: https://github.com/container-registry/helm-charts-oci-proxy
+# Not next to version: the appVersion bot PR and the chart release PR would edit adjacent lines and conflict.
+appVersion: "v2.0.1"
 icon: https://avatars.githubusercontent.com/u/46576199?s=200&v=4
 keywords:
   - Helm Proxy
