@@ -30,19 +30,7 @@ jobs:
 
       - name: Update appVersion
         id: bump
-        run: |
-          set -euo pipefail
-          # yq (mikefarah v4) is preinstalled on ubuntu-latest runners.
-          current=$(yq -r '.appVersion' chart/Chart.yaml)
-          if [ "${current}" = "${VERSION}" ]; then
-            echo "appVersion already ${VERSION}, nothing to do."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # style="double" keeps appVersion a quoted string, as Helm expects.
-          VERSION="${VERSION}" yq -i '.appVersion = (strenv(VERSION) | . style="double")' chart/Chart.yaml
-          [ "$(yq -r '.appVersion' chart/Chart.yaml)" = "${VERSION}" ]
-          echo "changed=true" >> "$GITHUB_OUTPUT"
+        run: python3 .github/scripts/update_appversion.py chart/Chart.yaml "${VERSION}"
 
       - name: Create pull request
         if: steps.bump.outputs.changed == 'true'
