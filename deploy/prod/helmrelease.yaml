@@ -80,3 +80,6 @@ spec:
         INDEX_ERROR_CACHE_TTL: 30
         REWRITE_DEPENDENCIES: false
         PROXY_HOST: ""
+        # Soft heap limit below the 1Gi container limit, so the Go runtime returns
+        # freed heap to the OS instead of holding it after a sweep.
+        GOMEMLIMIT: 700MiB
