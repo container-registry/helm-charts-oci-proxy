@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags "-s -w -X github.com/container-registry/helm-charts-oci-proxy/internal/version.Version=${VERSION}" -o /proxy .
 
-FROM cgr.dev/chainguard/wolfi-base:latest@sha256:771146c2dfc880902a185f060c3db5571473c46b267edd98c3119c83068dfb61
+FROM cgr.dev/chainguard/wolfi-base:latest@sha256:94fa13e26d449f7d78dbcd02d12ea37a0da80d24fcc3e1f17b95d515dec607a7
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="helm-charts-oci-proxy" \
       org.opencontainers.image.source="https://github.com/container-registry/helm-charts-oci-proxy" \
