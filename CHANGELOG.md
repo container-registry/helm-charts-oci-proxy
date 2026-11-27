@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/container-registry/helm-charts-oci-proxy/compare/v2.0.1...v2.0.2) (2026-11-27)
+
+
+### Bug Fixes
+
+* **deps:** bump golang.org/x/sync from 0.24.0 to 0.25.0 in the go-dependencies group across 1 directory ([#131](https://github.com/container-registry/helm-charts-oci-proxy/issues/131)) ([4fe6f24](https://github.com/container-registry/helm-charts-oci-proxy/commit/4fe6f241adb8661114ba30f03e27af22cde49df0))
+
 ## [2.0.1](https://github.com/container-registry/helm-charts-oci-proxy/compare/v2.0.0...v2.0.1) (2026-11-02)
 
 
